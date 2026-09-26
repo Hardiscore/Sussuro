@@ -1,0 +1,100 @@
+{
+  "name": "sussurro-rpg",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Sussurro - Aplicativo de chamadas de voz e vídeo em grupo",
+  "author": "Hardiscore",
+  "main": "main.cjs",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx server.ts",
+    "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "start": "node dist/server.cjs",
+    "preview": "vite preview",
+    "electron": "electron .",
+    "electron:dev": "electron .",
+    "clean": "rm -rf dist server.js release",
+    "lint": "tsc --noEmit",
+    "build:electron": "electron-builder --win",
+    "dist": "electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.sussurro.rpg",
+    "productName": "Sussurro RPG",
+    "npmRebuild": false,
+    "publish": {
+      "provider": "github",
+      "owner": "Hardiscore",
+      "repo": "sussurro-rpg"
+    },
+    "asar": true,
+    "asarUnpack": [
+      "**/node_modules/uiohook-napi/**/*"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.cjs",
+      "main.js",
+      "preload.cjs",
+      "preload.js",
+      "index.html",
+      "styles.css",
+      "app.js",
+      "webrtc.js",
+      "firebase-config.js",
+      "package.json",
+      "node_modules/uiohook-napi/**/*"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Sussurro RPG"
+    }
+  },
+  "dependencies": {
+    "@google/genai": "^2.4.0",
+    "@shiguredo/noise-suppression": "^2025.1.0",
+    "@shiguredo/rnnoise-wasm": "^2025.1.5",
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^6.1.1",
+    "dotenv": "^17.2.3",
+    "electron-updater": "^6.8.9",
+    "express": "^4.21.2",
+    "firebase": "^12.19.0",
+    "lucide-react": "^0.546.0",
+    "motion": "^12.23.24",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "uiohook-napi": "^1.5.5",
+    "vite": "^8.3.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "autoprefixer": "^10.4.21",
+    "electron": "^33.2.1",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.0",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2"
+  }
+}

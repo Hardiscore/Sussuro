@@ -1,0 +1,6 @@
+{
+  "name": "Sussurro",
+  "description": "Aplicativo de chamadas de voz e vídeo em grupo estilo Discord com sinalização Firebase Realtime Database para RPG de mesa.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

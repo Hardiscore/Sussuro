@@ -1,0 +1,785 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sussurro - Chamadas de Voz & Vídeo RPG</title>
+  <meta name="description" content="Sussurro - Aplicativo de chamadas de voz e vídeo em grupo estilo Discord com sinalização Firebase Realtime Database para RPG de mesa." />
+  <meta property="og:title" content="Sussurro - Chamadas de Voz & Vídeo RPG" />
+  <meta property="og:description" content="Sussurro - Aplicativo de chamadas de voz e vídeo em grupo estilo Discord com sinalização Firebase Realtime Database para RPG de mesa." />
+  <meta property="og:type" content="website" />
+  <link rel="stylesheet" href="./styles.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
+      "firebase/database": "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <!-- Custom Titlebar para Electron / Desktop -->
+  <header id="custom-titlebar">
+    <div class="titlebar-brand">
+      <!-- Ícone D20 / Headset -->
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2l8 4.5v9L12 22l-8-6.5v-9L12 2z"/>
+        <path d="M12 22V12"/>
+        <path d="M20 6.5l-8 5.5-8-5.5"/>
+      </svg>
+      <span>Sussurro</span>
+      <span class="titlebar-status-badge" id="titlebar-status">WebRTC P2P Mesh</span>
+    </div>
+    
+    <div class="titlebar-controls" id="window-controls">
+      <button class="window-btn" id="btn-window-minimize" title="Minimizar">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg>
+      </button>
+      <button class="window-btn" id="btn-window-maximize" title="Maximizar / Restaurar">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+      </button>
+      <button class="window-btn close-btn" id="btn-window-close" title="Fechar">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main id="app-container">
+    
+    <!-- ==========================================
+         LOBBY SCREEN (Tela de Entrada e Prévia)
+         ========================================== -->
+    <section id="lobby-screen" class="screen">
+      <div class="lobby-wrapper">
+        
+        <!-- Formulário de Entrada -->
+        <div class="lobby-card">
+          <div class="lobby-header">
+            <h1 class="lobby-title">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5865f2" stroke-width="2">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                <circle cx="9" cy="7" r="4"></circle>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+              </svg>
+              Sussurros de uma mesa de RPG
+            </h1>
+            <p class="lobby-subtitle">
+              Chamadas para as sessões de Lurya e outros joguinhos, por que não.
+            </p>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="input-user-name">Seu Nome ou Personagem</label>
+            <input type="text" id="input-user-name" class="form-input" placeholder="Ex: Eldrin (Mago) ou Gabriel" value="Aventureiro" maxlength="32" />
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Papel na Mesa</label>
+            <div class="role-selector">
+              <div class="role-option active" id="role-jogador" data-role="jogador">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 1 0-16 0"/></svg>
+                <span>Jogador</span>
+              </div>
+              <div class="role-option role-mestre" id="role-mestre" data-role="mestre">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                <span>Mestre (GM)</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="input-room-id">Código ou ID da Sala</label>
+            <div class="input-with-action">
+              <input type="text" id="input-room-id" class="form-input" placeholder="Ex: taverna-do-dragao-482" />
+              <button class="btn btn-secondary" id="btn-generate-room" title="Gerar ID Temático de RPG" type="button">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                <span>Gerar</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="action-buttons-group">
+            <button class="btn btn-primary" id="btn-join-room" type="button">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              <span>Entrar na Sala</span>
+            </button>
+            <button class="btn btn-secondary btn-icon-only" id="btn-open-settings" title="Configurações de Áudio, Vídeo e Rede (STUN/TURN)" type="button">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
+          </div>
+
+          <!-- Lista de Salas Criadas / Recentes (Máximo 2 salas por vez com paginação) -->
+          <div class="lobby-rooms-section">
+            <div class="lobby-rooms-header">
+              <span class="lobby-rooms-title">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+                  <polyline points="9 22 9 12 15 12 15 22"/>
+                </svg>
+                Salas Criadas / Recentes
+              </span>
+              <div class="lobby-rooms-pagination" id="lobby-rooms-pagination">
+                <button type="button" class="btn-room-page" id="btn-room-prev" title="Página anterior" disabled>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>
+                </button>
+                <span id="room-page-info">1 / 1</span>
+                <button type="button" class="btn-room-page" id="btn-room-next" title="Próxima página" disabled>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>
+                </button>
+              </div>
+            </div>
+            
+            <div class="lobby-rooms-list" id="lobby-rooms-list">
+              <!-- Renderizado dinamicamente: exatamente no máximo 2 salas por vez -->
+            </div>
+          </div>
+        </div>
+
+        <!-- Prévia de Áudio e Vídeo no Lobby -->
+        <div class="preview-container">
+          <div class="preview-video-box" id="lobby-preview-box">
+            <video id="lobby-preview-video" autoplay playsinline muted></video>
+            <div class="preview-avatar" id="lobby-preview-avatar" style="display: none;">
+              <span id="lobby-avatar-letter">A</span>
+            </div>
+            <div class="preview-status-badges">
+              <span class="status-badge" id="badge-lobby-audio">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                Mic Ativo
+              </span>
+              <span class="status-badge" id="badge-lobby-video">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                Vídeo Ativo
+              </span>
+            </div>
+          </div>
+
+          <div class="audio-meter-wrap">
+            <span>Teste de Microfone:</span>
+            <div class="audio-meter-bar">
+              <div class="audio-meter-fill" id="lobby-audio-meter-fill"></div>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 8px;">
+            <label class="form-label" for="select-lobby-mic">Microfone</label>
+            <select id="select-lobby-mic" class="form-input"></select>
+          </div>
+
+          <div class="form-group" style="margin-bottom: 0;">
+            <label class="form-label" for="select-lobby-cam">Câmera (Webcam / OBS Virtual Camera)</label>
+            <select id="select-lobby-cam" class="form-input"></select>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ==========================================
+         CALL SCREEN (Sala de Chamada Ativa)
+         ========================================== -->
+    <section id="call-screen" class="screen hidden">
+      
+      <!-- Top Call Header -->
+      <header class="call-header">
+        <div class="room-identity">
+          <div class="room-name-badge">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5865f2" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <span id="call-room-title">Sala RPG</span>
+            <span class="room-tag" id="call-participant-count">1/15 Participantes</span>
+          </div>
+
+          <button class="btn btn-secondary" id="btn-copy-room-id" style="padding: 6px 12px; font-size: 12px;" title="Copiar ID da Sala">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            <span>Copiar ID</span>
+          </button>
+        </div>
+
+        <!-- Control Bar in Header (Between Copiar ID and Header Meta / Firebase State) -->
+        <div class="control-bar-wrapper">
+          <div class="control-bar">
+            
+            <!-- Microfone -->
+            <div class="control-btn-group">
+              <button class="control-btn" id="btn-toggle-mic" data-tooltip="Mutar Microfone" type="button">
+                <svg id="icon-mic-on" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                <svg id="icon-mic-off" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+              </button>
+              <button class="control-btn-arrow" id="btn-mic-arrow" data-tooltip="Trocar Microfone" type="button">▾</button>
+            </div>
+
+            <!-- Câmera -->
+            <div class="control-btn-group">
+              <button class="control-btn active-danger" id="btn-toggle-cam" data-tooltip="Ligar Câmera" type="button">
+                <svg id="icon-cam-on" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                <svg id="icon-cam-off" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+              </button>
+              <button class="control-btn-arrow" id="btn-cam-arrow" data-tooltip="Trocar Câmera / Selecionar OBS" type="button">▾</button>
+            </div>
+
+            <!-- Compartilhar Tela -->
+            <button class="control-btn" id="btn-share-screen" data-tooltip="Compartilhar Tela / Mapa" type="button">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            </button>
+
+            <!-- Dados de RPG -->
+            <button class="control-btn" id="btn-toggle-dice-panel" data-tooltip="Abrir Dados de RPG" type="button">
+              <span style="font-size: 15px; line-height: 1;">🎲</span>
+            </button>
+
+            <!-- Configurações -->
+            <button class="control-btn" id="btn-control-settings" data-tooltip="Configurações (STUN/TURN)" type="button">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            </button>
+
+            <!-- Sair da Sala -->
+            <button class="control-btn leave-btn" id="btn-leave-call" data-tooltip="Desconectar" type="button">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><line x1="23" y1="1" x2="1" y2="23"/></svg>
+            </button>
+
+          </div>
+        </div>
+
+        <div class="header-meta">
+          <div class="connection-indicator">
+            <div class="indicator-dot" id="call-ice-dot"></div>
+            <span id="call-ice-status">WebRTC Conectado</span>
+          </div>
+
+          <!-- Seletor de Modo de Exibição / Layout -->
+          <div class="layout-selector-wrapper" style="position: relative;">
+            <button class="btn btn-secondary" id="btn-toggle-layout-menu" style="padding: 6px 12px; font-size: 13px;" title="Alternar Layout de Vídeo (Atalho: L)" type="button">
+              <span id="layout-active-icon">🔀</span>
+              <span id="layout-active-label">Grid Móvel</span>
+              <span style="font-size: 10px; margin-left: 4px; color: var(--text-muted);">▾</span>
+            </button>
+            <div id="layout-dropdown-menu" class="layout-dropdown hidden">
+              <div class="layout-dropdown-header">Modo de Exibição (Atalho: L)</div>
+              <button class="layout-dropdown-item active" data-layout="movel" type="button">
+                <span class="layout-item-icon">🔀</span>
+                <div class="layout-item-details">
+                  <span class="layout-item-title">Grid Móvel (Padrão)</span>
+                  <span class="layout-item-sub">Telas se acomodam para dividir igualmente</span>
+                </div>
+              </button>
+              <button class="layout-dropdown-item" data-layout="fixo" type="button">
+                <span class="layout-item-icon">🏛️</span>
+                <div class="layout-item-details">
+                  <span class="layout-item-title">Grid Fixo</span>
+                  <span class="layout-item-sub">Vagas fixas de mesa de RPG pré-determinadas</span>
+                </div>
+              </button>
+              <button class="layout-dropdown-item" data-layout="destaque" type="button">
+                <span class="layout-item-icon">⭐</span>
+                <div class="layout-item-details">
+                  <span class="layout-item-title">Grid Destaque</span>
+                  <span class="layout-item-sub">Quem fala ocupa 50%, demais dividem o restante</span>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          <!-- Controle Rápido de Vagas no Modo Grid Fixo -->
+          <div id="fixed-slots-header-control" class="fixed-slots-control" style="display: none; align-items: center; gap: 4px; background: var(--bg-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); padding: 2px 8px;">
+            <span style="font-size: 11px; font-weight: 700; color: var(--accent-gold);">Vagas:</span>
+            <button class="btn-slot-adjust" id="btn-dec-slots" title="Diminuir vagas no grid fixo" type="button" style="background: none; border: none; color: var(--text-normal); cursor: pointer; font-size: 14px; font-weight: bold; padding: 2px 5px; border-radius: 3px;">−</button>
+            <span id="label-fixed-slots" style="font-size: 12px; font-weight: 800; color: var(--text-bright); min-width: 18px; text-align: center;">5</span>
+            <button class="btn-slot-adjust" id="btn-inc-slots" title="Aumentar vagas no grid fixo" type="button" style="background: none; border: none; color: var(--text-normal); cursor: pointer; font-size: 14px; font-weight: bold; padding: 2px 5px; border-radius: 3px;">+</button>
+          </div>
+
+          <!-- Botão Exclusivo do Mestre para Silenciar Todos os Jogadores -->
+          <button class="btn-gm-mute-all hidden" id="btn-gm-mute-all" title="Silenciar microfone de todos os jogadores da mesa (Comando de Mestre)" type="button">
+            <span>👑 Silenciar Todos</span>
+          </button>
+
+          <button class="btn btn-secondary" id="btn-quick-dice" style="padding: 6px 12px; font-size: 13px; color: var(--accent-gold); border-color: rgba(240, 178, 50, 0.4);" type="button">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+            <span>Rolar D20</span>
+          </button>
+
+          <button class="btn btn-secondary btn-icon-only" id="btn-call-settings" title="Configurações" type="button">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          </button>
+        </div>
+      </header>
+
+      <!-- Banner de Aviso de Ausência de Áudio / Microfone -->
+      <div id="no-audio-warning-banner" class="no-audio-warning-banner hidden">
+        <div class="no-audio-warning-content">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="1" y1="1" x2="23" y2="23"/>
+            <path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/>
+            <path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/>
+            <line x1="12" y1="19" x2="12" y2="23"/>
+            <line x1="8" y1="23" x2="16" y2="23"/>
+          </svg>
+          <span id="no-audio-warning-text">Aviso: Nenhum microfone detectado. Você entrou na chamada apenas como ouvinte.</span>
+        </div>
+        <button id="btn-close-audio-warning" class="btn-close-warning" type="button" title="Fechar aviso">✕</button>
+      </div>
+
+      <!-- Toast de Entrada/Saída de Participantes (Presença) -->
+      <div id="presence-toast" class="presence-toast hidden">
+        <span id="presence-toast-icon" style="font-size: 16px;">👋</span>
+        <span id="presence-toast-text"></span>
+      </div>
+
+      <!-- Video Grid (Grade P2P Mesh de até 5 pessoas) -->
+      <div class="video-grid-container">
+        <div id="video-grid" data-count="1">
+          
+          <!-- Tile do Participante Local (Câmera desligada por padrão) -->
+          <div class="video-tile local-tile" id="tile-local">
+            <video id="local-video" autoplay playsinline muted style="display: none;"></video>
+            <div class="avatar-fallback" id="local-avatar-fallback" style="display: flex;">
+              <span id="local-avatar-letter">A</span>
+              <span class="avatar-class-icon" id="local-class-icon">⚔️</span>
+            </div>
+            
+            <div class="tile-overlay">
+              <div class="tile-participant-info">
+                <span class="participant-name" id="local-tile-name">Você (Eldrin)</span>
+                <span class="badge-role jogador" id="local-tile-badge">Jogador</span>
+              </div>
+              <div class="tile-status-icons">
+                <span class="tile-icon-badge" id="local-icon-audio">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
+                </span>
+                <span class="tile-icon-badge" id="local-icon-video">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Os tiles dos peers remotos serão injetados dinamicamente aqui -->
+        </div>
+
+        <!-- Toast Flutuante de Rolagem de Dados de RPG -->
+        <div id="dice-toast" class="dice-toast hidden">
+          <span style="font-size: 18px;">🎲</span>
+          <span id="dice-toast-text"></span>
+        </div>
+
+        <!-- Popup de Rolagem de Dados de RPG (Oculto por padrão, acionado pelo botão) -->
+        <div id="dice-roller-modal" class="hidden">
+          <div class="dice-modal-header">
+            <div class="dice-modal-title">
+              <span>🎲</span>
+              <span>Rolador de Dados RPG</span>
+            </div>
+            <button id="btn-close-dice" class="dice-close-btn" title="Fechar (ESC)" type="button">✕</button>
+          </div>
+          <div class="dice-grid">
+            <button class="dice-btn" data-die="4" type="button"><span>🎲</span><span>D4</span></button>
+            <button class="dice-btn" data-die="6" type="button"><span>🎲</span><span>D6</span></button>
+            <button class="dice-btn" data-die="8" type="button"><span>🎲</span><span>D8</span></button>
+            <button class="dice-btn" data-die="10" type="button"><span>🎲</span><span>D10</span></button>
+            <button class="dice-btn" data-die="12" type="button"><span>🎲</span><span>D12</span></button>
+            <button class="dice-btn d20" data-die="20" type="button"><span>⚔️</span><span>D20</span></button>
+            <button class="dice-btn" data-die="100" type="button"><span>✨</span><span>D100</span></button>
+          </div>
+          <div class="dice-result-banner" id="dice-result-display">
+            Clique em um dado para rolar na sessão!
+          </div>
+          <div style="margin-top: 10px; display: flex; justify-content: flex-end;">
+            <button id="btn-dismiss-dice-bottom" class="btn btn-secondary" style="padding: 4px 12px; font-size: 12px;" type="button">Fechar Janela</button>
+          </div>
+        </div>
+
+      </div>
+
+
+
+    </section>
+
+  </main>
+
+  <!-- ==========================================
+       SETTINGS MODAL (Discord Modal Style)
+       ========================================== -->
+  <div id="settings-modal" class="modal-backdrop hidden">
+    <div class="settings-window">
+      
+      <!-- Sidebar de Categorias -->
+      <nav class="settings-sidebar">
+        <div class="settings-sidebar-header">Configurações de Usuário</div>
+        <button class="settings-nav-item active" data-tab="tab-devices">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+          <span>Voz e Atalhos</span>
+        </button>
+        <button class="settings-nav-item" data-tab="tab-layout">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          <span>Modos de Exibição</span>
+        </button>
+        <button class="settings-nav-item" data-tab="tab-rpg">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          <span>Mesa de RPG</span>
+        </button>
+        <button class="settings-nav-item" data-tab="tab-ice">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span>Rede e Conexão</span>
+        </button>
+      </nav>
+
+      <!-- Conteúdo das Abas -->
+      <div class="settings-content">
+        <button class="settings-close-btn" id="btn-close-settings-modal" title="Fechar (ESC)">✕</button>
+
+        <!-- ABA 1: DISPOSITIVOS E ATALHOS (VOZ E VÍDEO) -->
+        <div class="settings-tab-pane active" id="tab-devices">
+          <h2 class="settings-section-title">Dispositivos de Áudio, Vídeo e Atalhos</h2>
+          <p class="settings-section-desc">
+            Configure seu microfone, câmera e atalho de ativação de voz (Push to Talk ou Alternar Mudo).
+          </p>
+
+          <div class="form-group">
+            <label class="form-label" for="settings-select-mic">Dispositivo de Entrada de Áudio (Microfone)</label>
+            <select id="settings-select-mic" class="form-input"></select>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Teste de Sensibilidade do Microfone</label>
+            <div class="audio-meter-bar" style="height: 10px; margin-top: 6px;">
+              <div class="audio-meter-fill" id="settings-audio-meter-fill"></div>
+            </div>
+          </div>
+
+          <!-- SEÇÃO: MODO DE ATIVAÇÃO DO MICROFONE E ATALHO -->
+          <div class="ice-card" style="margin-top: 20px;">
+            <div class="ice-card-header">
+              <span class="ice-title">Atalho do Microfone & Modo de Transmissão</span>
+            </div>
+            
+            <div class="form-group" style="margin-top: 10px;">
+              <label class="form-label">Modo de Funcionamento:</label>
+              <div style="display: flex; gap: 12px; margin-top: 6px;">
+                <label class="role-option" style="cursor: pointer; flex: 1;" id="lbl-mode-toggle">
+                  <input type="radio" name="mic-activation-mode" value="toggle" checked style="accent-color: var(--accent-blurple);" />
+                  <span><strong>Alternar Mudo</strong> (Pressione a tecla para mutar/desmutar)</span>
+                </label>
+                <label class="role-option" style="cursor: pointer; flex: 1;" id="lbl-mode-ptt">
+                  <input type="radio" name="mic-activation-mode" value="push_to_talk" style="accent-color: var(--accent-blurple);" />
+                  <span><strong>Push to Talk</strong> (Segure a tecla para falar)</span>
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group" style="margin-top: 14px;">
+              <label class="form-label">Tecla ou Botão de Atalho (Teclado ou Mouse):</label>
+              <div style="display: flex; align-items: center; gap: 14px; margin-top: 6px;">
+                <div class="hotkey-badge" id="settings-hotkey-display">M</div>
+                <button class="btn btn-secondary" id="btn-record-hotkey" type="button">
+                  <span id="record-hotkey-text">Alterar Tecla / Botão</span>
+                </button>
+                <button class="btn btn-secondary" id="btn-reset-hotkey" type="button" title="Restaurar tecla M padrão">
+                  <span>Restaurar "M"</span>
+                </button>
+              </div>
+              <p class="form-help-text" id="hotkey-hint" style="font-size: 12px; color: var(--text-muted); margin-top: 8px;">
+                Ao acionar <strong style="color: var(--accent-gold);">M</strong>, seu microfone será ativado instantaneamente.
+              </p>
+              <div style="margin-top: 10px; padding: 8px 12px; background: rgba(88, 101, 242, 0.1); border: 1px solid rgba(88, 101, 242, 0.25); border-radius: 6px; font-size: 12px; color: #b5bac1; display: flex; align-items: center; gap: 8px;">
+                <span style="font-size: 14px;">🖥️</span>
+                <span><strong>Atalho Global Ativo:</strong> No app de desktop (Electron), o atalho de teclado e botões de mouse (Mouse 4 e Mouse 5) funcionam em segundo plano no PC (Alt+Tab), mesmo durante jogos em tela cheia.</span>
+              </div>
+              <div style="margin-top: 8px; padding: 10px 12px; background: rgba(88, 101, 242, 0.08); border: 1px solid rgba(88, 101, 242, 0.2); border-radius: 6px; font-size: 12px; color: #b5bac1; display: flex; align-items: flex-start; gap: 8px;">
+                <span style="font-size: 16px;">🖱️</span>
+                <div>
+                  <strong style="color: var(--accent-blurple);">Mouses Gamer (Redragon Predator, Logitech, Razer, etc.):</strong> 
+                  Você pode pressionar diretamente os botões laterais (<strong>Mouse 4</strong> ou <strong>Mouse 5</strong>) ao clicar em "Alterar Tecla / Botão". Se o seu mouse possuir botões adicionais de macro (G1 a G12), você também pode associá-los a teclas dedicadas no software do fabricante.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: 24px;">
+            <label class="form-label" for="settings-select-cam">Dispositivo de Entrada de Vídeo (Câmera / OBS)</label>
+            <select id="settings-select-cam" class="form-input"></select>
+          </div>
+
+          <!-- SEÇÃO: SUPRESSÃO DE RUÍDO & NOISE GATE (FILTRO DE FUNDO) -->
+          <div class="ice-card" style="margin-top: 20px;">
+            <div class="ice-card-header">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span class="ice-title">Supressão de Ruído (Otimizado para RPG)</span>
+                <span class="tag-free">100% Gratuito</span>
+              </div>
+              <span id="noise-gate-indicator-badge" class="tag-free" style="background: rgba(35, 165, 90, 0.15); color: var(--accent-green);">🎙️ Voz Transmitindo</span>
+            </div>
+            
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;">
+              Escolha o supressor de ruído. O <strong>RNNoise (IA Neural)</strong> é recomendado para RPG, pois remove chiados sem cortar sussurros ou efeitos sonoros. Os modos são mutuamente exclusivos.
+            </p>
+
+            <div class="form-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px;">
+              <label class="role-option" style="cursor: pointer;">
+                <input type="radio" name="noise-suppression-mode" value="rnnoise" checked style="accent-color: var(--accent-blurple);" />
+                <span><strong>RNNoise (Rede Neural / IA de Voz - Padrão)</strong><br/><small style="color: var(--text-muted); font-weight: normal;">Elimina chiado e ventoinhas preservando sussurros e a dinâmica vocal de RPG.</small></span>
+              </label>
+              
+              <label class="role-option" style="cursor: pointer;">
+                <input type="radio" name="noise-suppression-mode" value="noisegate" style="accent-color: var(--accent-blurple);" />
+                <span><strong>Portão de Ruído (Noise Gate Tradicional)</strong><br/><small style="color: var(--text-muted); font-weight: normal;">Corta o áudio abaixo de um limiar de volume (pode cortar sussurros baixos).</small></span>
+              </label>
+
+              <label class="role-option" style="cursor: pointer;">
+                <input type="radio" name="noise-suppression-mode" value="none" style="accent-color: var(--accent-blurple);" />
+                <span><strong>Nenhum (Áudio 100% Cru)</strong><br/><small style="color: var(--text-muted); font-weight: normal;">Sem supressão. Ideal para testes de áudio, efeitos especiais e vozes complexas.</small></span>
+              </label>
+            </div>
+
+            <div class="form-group" style="margin-bottom: 0; display: none;" id="noise-gate-slider-group">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+                <label class="form-label" style="margin: 0;" for="slider-noise-gate">Sensibilidade do Portão de Ruído (Noise Gate):</label>
+                <span id="noise-gate-threshold-val" style="font-family: monospace; font-size: 13px; font-weight: 700; color: var(--accent-gold);">14</span>
+              </div>
+              <input type="range" id="slider-noise-gate" class="tile-volume-slider" min="2" max="40" value="14" step="1" />
+              <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-top: 4px;">
+                <span>Mais sensível (sala silenciosa)</span>
+                <span>Corte agressivo (teclado / ventilador)</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-group" style="margin-top: 16px;">
+            <label class="role-option" style="cursor: pointer;">
+              <input type="checkbox" id="settings-check-mirror" checked style="accent-color: var(--accent-blurple);" />
+              <span>Espelhar visualização da minha própria câmera</span>
+            </label>
+          </div>
+
+          <div class="form-group" style="margin-top: 14px;">
+            <label class="role-option" style="cursor: pointer;">
+              <input type="checkbox" id="settings-check-sound-feedback" checked style="accent-color: var(--accent-blurple);" />
+              <span>Sons de feedback ao mutar, desmutar e beep de Push to Talk</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- ABA 2: MODOS DE EXIBIÇÃO (LAYOUT DO GRID) -->
+        <div class="settings-tab-pane" id="tab-layout">
+          <h2 class="settings-section-title">Modos de Exibição das Câmeras (Grid)</h2>
+          <p class="settings-section-desc">
+            Escolha como os vídeos dos aventureiros serão organizados na tela. Você também pode alternar rapidamente a qualquer momento pressionando o atalho <strong>"L"</strong>.
+          </p>
+
+          <div class="layout-selection-cards" style="display: flex; flex-direction: column; gap: 14px; margin-top: 16px;">
+            
+            <!-- Modo 1: Grid Móvel -->
+            <label class="layout-card-option active" id="card-layout-movel" style="cursor: pointer;">
+              <input type="radio" name="settings-grid-layout" value="movel" checked style="accent-color: var(--accent-blurple);" />
+              <div class="layout-card-icon">🔀</div>
+              <div class="layout-card-info">
+                <div class="layout-card-title">
+                  <span>Grid Móvel (Padrão Atual)</span>
+                  <span class="tag-free">Dinâmico</span>
+                </div>
+                <div class="layout-card-desc">
+                  Quanto mais pessoas entram na sala, as telas se auto-acomodam dinamicamente para que todos ocupem o mesmo espaço de forma equilibrada.
+                </div>
+              </div>
+            </label>
+
+            <!-- Modo 2: Grid Fixo -->
+            <label class="layout-card-option" id="card-layout-fixo" style="cursor: pointer;">
+              <input type="radio" name="settings-grid-layout" value="fixo" style="accent-color: var(--accent-blurple);" />
+              <div class="layout-card-icon">🏛️</div>
+              <div class="layout-card-info">
+                <div class="layout-card-title">
+                  <span>Grid Fixo (Mesa de RPG Clássica)</span>
+                  <span class="tag-free" style="background: rgba(240, 178, 50, 0.2); color: var(--accent-gold);">Mesa Estável</span>
+                </div>
+                <div class="layout-card-desc">
+                  Cada participante aparece em posições pré-determinadas fixas, mantendo a mesa organizada mesmo que haja vagas sobrando. Escolha quantas vagas quiser abaixo.
+                </div>
+                <div style="margin-top: 10px; display: flex; align-items: center; gap: 8px;">
+                  <span style="font-size: 12px; color: var(--text-muted);">Câmeras / Vagas fixas no grid:</span>
+                  <input type="number" id="input-fixed-grid-slots" class="form-input" min="1" max="15" step="1" value="5" style="max-width: 80px; padding: 4px 8px;" onclick="event.stopPropagation()" />
+                  <span style="font-size: 11px; color: var(--text-muted);">(1 a 15 vagas)</span>
+                </div>
+              </div>
+            </label>
+
+            <!-- Modo 3: Grid Destaque -->
+            <label class="layout-card-option" id="card-layout-destaque" style="cursor: pointer;">
+              <input type="radio" name="settings-grid-layout" value="destaque" style="accent-color: var(--accent-blurple);" />
+              <div class="layout-card-icon">⭐</div>
+              <div class="layout-card-info">
+                <div class="layout-card-title">
+                  <span>Grid Destaque (Foco na Fala)</span>
+                  <span class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple);">Foco Ativo</span>
+                </div>
+                <div class="layout-card-desc">
+                  Quem está falando ativamente fica maior na tela (ocupando até 50% do espaço), e os outros aventureiros dividem os outros 50% menores.
+                </div>
+              </div>
+            </label>
+
+          </div>
+
+          <div style="margin-top: 20px; padding: 14px; background: var(--bg-card); border-radius: var(--radius-sm); border-left: 3px solid var(--accent-gold); font-size: 13px; line-height: 1.5;">
+            💡 <strong>Dica Rápida:</strong> Durante a partida, você pode mudar o modo na barra superior da sala ou simplesmente pressionar a tecla <strong>L</strong> no seu teclado.
+          </div>
+        </div>
+
+        <!-- ABA 3: MESA DE RPG (PERSONAGEM / AVATAR) -->
+        <div class="settings-tab-pane" id="tab-rpg">
+          <h2 class="settings-section-title">Personalização do Personagem de RPG</h2>
+          <p class="settings-section-desc">
+            Escolha seu ícone de classe para aparecer no seu avatar quando sua câmera estiver desligada.
+          </p>
+
+          <div class="form-group">
+            <label class="form-label">Classe do Personagem</label>
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 8px;">
+              <button class="role-option active rpg-class-pick" data-icon="⚔️" type="button"><span>⚔️ Guerreiro</span></button>
+              <button class="role-option rpg-class-pick" data-icon="🔮" type="button"><span>🔮 Mago</span></button>
+              <button class="role-option rpg-class-pick" data-icon="🏹" type="button"><span>🏹 Arqueiro</span></button>
+              <button class="role-option rpg-class-pick" data-icon="🛡️" type="button"><span>🛡️ Paladino</span></button>
+              <button class="role-option rpg-class-pick" data-icon="🗡️" type="button"><span>🗡️ Ladino</span></button>
+              <button class="role-option rpg-class-pick" data-icon="📜" type="button"><span>📜 Clérigo</span></button>
+              <button class="role-option rpg-class-pick" data-icon="🐺" type="button"><span>🐺 Druida</span></button>
+              <button class="role-option rpg-class-pick" data-icon="👑" type="button"><span>👑 Mestre / GM</span></button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 4: REDE E SERVIDORES ICE (STUN / TURN) -->
+        <div class="settings-tab-pane" id="tab-ice">
+          <h2 class="settings-section-title">Configurações Avançadas de Rede (ICE / STUN / TURN)</h2>
+          <p class="settings-section-desc">
+            O WebRTC conecta diretamente os participantes ponto a ponto. Se você ou algum jogador estiver atrás de NAT simétrico (firewall de provedor/CGNAT), configure um servidor TURN gratuito de retransmissão abaixo.
+          </p>
+
+          <!-- STUN Padrão -->
+          <div class="ice-card">
+            <div class="ice-card-header">
+              <span class="ice-title">Servidor STUN Padrão (Google)</span>
+              <span class="tag-free">Gratuito & Ativo</span>
+            </div>
+            <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 8px;">
+              Usado para descoberta de endereço IP público:
+            </p>
+            <input type="text" class="form-input" value="stun:stun.l.google.com:19302" readonly style="color: var(--text-muted);" />
+          </div>
+
+          <!-- TURN Customizado -->
+          <div class="ice-card">
+            <div class="ice-card-header">
+              <span class="ice-title">Servidor TURN Customizado (Relay para Firewall / CGNAT)</span>
+            </div>
+            <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;">
+              Dica: Você pode obter credenciais TURN 100% gratuitas em serviços como <strong>Metered.ca</strong> (50GB/mês grátis), <strong>OpenRelay Project</strong> ou <strong>Twilio</strong>.
+            </p>
+
+            <div class="form-group">
+              <label class="form-label" for="input-turn-url">URL do Servidor TURN</label>
+              <input type="text" id="input-turn-url" class="form-input" placeholder="Ex: turn:global.relay.metered.ca:80 ou turns:openrelay.metered.ca:443" />
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+              <div class="form-group">
+                <label class="form-label" for="input-turn-username">Usuário (Username)</label>
+                <input type="text" id="input-turn-username" class="form-input" placeholder="Ex: openrelayproject" />
+              </div>
+              <div class="form-group">
+                <label class="form-label" for="input-turn-credential">Senha / Credencial (Password)</label>
+                <input type="password" id="input-turn-credential" class="form-input" placeholder="Ex: openrelayproject" />
+              </div>
+            </div>
+
+            <div style="display: flex; gap: 10px; margin-top: 12px;">
+              <button class="btn btn-primary" id="btn-save-turn" style="flex: 0 0 auto;" type="button">
+                <span>Salvar Servidores ICE</span>
+              </button>
+              <button class="btn btn-secondary" id="btn-reset-turn" type="button">
+                <span>Restaurar Padrões</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+
+  <!-- ==========================================
+       SCREEN SHARE MODAL (Discord Style Picker)
+       ========================================== -->
+  <div id="screenshare-modal" class="modal-backdrop hidden">
+    <div class="screenshare-window">
+      <div class="screenshare-header">
+        <div class="screenshare-header-title">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <span>Compartilhar sua Tela ou Aplicativo</span>
+        </div>
+        <button id="btn-close-screenshare-modal" class="settings-close-btn" title="Fechar (ESC)" type="button">✕</button>
+      </div>
+
+      <!-- Navigation Tabs: Telas vs Janelas de Aplicativos -->
+      <div class="screenshare-tabs">
+        <button class="screenshare-tab active" id="tab-btn-screens" data-type="screen" type="button">
+          <span>🖥️ Telas Inteiras</span>
+        </button>
+        <button class="screenshare-tab" id="tab-btn-windows" data-type="window" type="button">
+          <span>🪟 Janelas de Aplicativos</span>
+        </button>
+      </div>
+
+      <!-- Container de seleção de fonte -->
+      <div class="screenshare-body">
+        <div class="screenshare-source-grid" id="screenshare-source-grid">
+          <!-- Cards de fontes carregados dinamicamente ou cards padrão de seleção -->
+        </div>
+
+        <!-- Opções de Áudio e Qualidade -->
+        <div class="screenshare-options-panel">
+          <div class="screenshare-option-row">
+            <label class="screenshare-checkbox-label">
+              <input type="checkbox" id="screenshare-check-audio" checked style="accent-color: var(--accent-blurple);" />
+              <div>
+                <span class="option-title">🔊 Transmitir Áudio da Transmissão (Jogos / Vídeos / Abas)</span>
+                <span class="option-sub">Dica de Som: No Chrome/Edge, para transmitir o áudio do jogo ou vídeo, escolha <strong>"Tela Inteira"</strong> e marque a caixinha <strong>"Compartilhar áudio do sistema"</strong> no canto inferior esquerdo, ou escolha uma <strong>"Guia do Chrome"</strong>. (Navegadores não capturam som de janelas isoladas).</span>
+              </div>
+            </label>
+          </div>
+
+          <div class="screenshare-option-row">
+            <label class="screenshare-checkbox-label">
+              <input type="checkbox" id="screenshare-check-mic" checked style="accent-color: var(--accent-blurple);" />
+              <div>
+                <span class="option-title">🎙️ Manter meu Microfone Ativo junto com a Transmissão</span>
+                <span class="option-sub">Permite falar na chamada de RPG enquanto o áudio do jogo ou aplicativo é transmitido.</span>
+              </div>
+            </label>
+          </div>
+
+          <div class="screenshare-quality-row">
+            <div class="form-group" style="margin: 0; flex: 1;">
+              <label class="form-label" style="font-size: 11px; margin-bottom: 4px; color: var(--text-muted);">Resolução & Fluidez da Transmissão:</label>
+              <select id="screenshare-select-quality" class="form-input" style="padding: 7px 10px; font-size: 12px;">
+                <option value="720p30">720p @ 30 FPS (Fluido & Recomendado para RPG)</option>
+                <option value="1080p60">1080p @ 60 FPS (Alta Qualidade para Jogos)</option>
+                <option value="1080p30">1080p @ 30 FPS (Nítido para Mapas e Fichas)</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="screenshare-footer">
+        <button class="btn btn-secondary" id="btn-cancel-screenshare" type="button">Cancelar</button>
+        <button class="btn btn-primary" id="btn-confirm-screenshare" type="button">
+          <span>Iniciar Transmissão</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
