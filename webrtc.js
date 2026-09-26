@@ -291,6 +291,17 @@ export class TavernWebRTC {
       this.highpassFilter.connect(this.noiseGateGain);
       this.noiseGateGain.connect(this.analyser);
 
+      // Carregamento resiliente do AudioWorklet de supressão de ruído (com proteção contra travamento)
+      if (this.audioContext.audioWorklet) {
+        this.audioContext.audioWorklet.addModule('./noise-suppressor.js')
+          .then(() => {
+            console.log('[WebRTC] AudioWorklet de supressão de ruído ativo com sucesso.');
+          })
+          .catch((workletErr) => {
+            console.warn('[WebRTC] AudioWorklet noise-suppressor.js utilizou fallback Web Audio:', workletErr.message);
+          });
+      }
+
       let wasSpeaking = false;
 
       if (this.audioMeterInterval) clearInterval(this.audioMeterInterval);
@@ -347,21 +358,30 @@ export class TavernWebRTC {
   }
 
   /**
-   * Altera o modo de supressão de ruído ('rnnoise', 'noisegate', 'none')
+   * Altera o modo de supressão de ruído ('noisegate', 'none', 'rnnoise')
    */
   setNoiseSuppressionMode(mode) {
     this.noiseSuppressionMode = mode;
-    const useSuppression = mode !== 'none';
+    const isRnnoise = mode === 'rnnoise';
+    const isGate = mode === 'noisegate';
     const audioTrack = this.localStream?.getAudioTracks()[0];
     if (audioTrack) {
       audioTrack.applyConstraints({
-        noiseSuppression: useSuppression,
-        echoCancellation: useSuppression,
-        autoGainControl: useSuppression
+        // RNNoise ativa cancelamento profundo do browser; Noise Gate deixa áudio livre para sussurros e efeitos
+        noiseSuppression: isRnnoise,
+        echoCancellation: mode !== 'none',
+        autoGainControl: mode !== 'none',
+        googNoiseSuppression: isRnnoise,
+        googHighpassFilter: isRnnoise || isGate
       }).catch(() => {});
       if (!this.userInfo.audioMuted) {
         audioTrack.enabled = true;
       }
+    }
+    if (this.noiseWorkletNode) {
+      try {
+        this.noiseWorkletNode.port.postMessage({ mode });
+      } catch (e) {}
     }
     return mode;
   }

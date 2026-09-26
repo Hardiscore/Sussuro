@@ -25,6 +25,10 @@ const STORAGE_KEYS = {
   SAVED_ROOMS: 'tavern_saved_rooms'
 };
 
+// Configuração de paginação do Lobby
+export const ROOMS_PER_PAGE = 2; // Exatamente no máximo 2 salas visíveis por vez no lobby
+let currentRoomPage = 0;
+
 const StorageService = {
   get(key, defaultValue = null) {
     try {
@@ -57,7 +61,7 @@ const StorageService = {
       mirrorVideo: this.get(STORAGE_KEYS.MIRROR_VIDEO, 'true') !== 'false',
       micMode: this.get(STORAGE_KEYS.MIC_MODE, 'toggle'),
       micHotkey: this.get(STORAGE_KEYS.MIC_HOTKEY, '='),
-      noiseSuppressionMode: this.get(STORAGE_KEYS.NOISE_SUPPRESSION_MODE, 'rnnoise'),
+      noiseSuppressionMode: this.get(STORAGE_KEYS.NOISE_SUPPRESSION_MODE, 'noisegate'),
       noiseGateThreshold: parseInt(this.get(STORAGE_KEYS.NOISE_GATE_THRESHOLD, '14'), 10) || 14,
       layoutMode: this.get(STORAGE_KEYS.LAYOUT_MODE, 'movel'),
       fixedGridSlots: Math.max(1, Math.min(15, parseInt(this.get(STORAGE_KEYS.FIXED_GRID_SLOTS, '5'), 10) || 5)),
@@ -479,12 +483,6 @@ async function initApp() {
   }
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initApp);
-} else {
-  initApp();
-}
-
 // ============================================================================
 // INTEGRAÇÃO COM ELECTRON (Window Controls)
 // ============================================================================
@@ -501,6 +499,19 @@ function setupElectronTitlebar() {
     if (btnMin) btnMin.onclick = () => window.electronAPI.minimize();
     if (btnMax) btnMax.onclick = () => window.electronAPI.maximize();
     if (btnClose) btnClose.onclick = () => window.electronAPI.close();
+
+    // Notificações de Atualização Automática via GitHub Releases
+    if (typeof window.electronAPI.onUpdateAvailable === 'function') {
+      window.electronAPI.onUpdateAvailable((info) => {
+        showLayoutNotification(`📦 Nova versão v${info?.version || ''} detectada no GitHub! Baixando atualização...`);
+      });
+    }
+
+    if (typeof window.electronAPI.onUpdateDownloaded === 'function') {
+      window.electronAPI.onUpdateDownloaded((info) => {
+        showUpdateBanner(info);
+      });
+    }
   } else {
     if (statusBadge) statusBadge.textContent = 'WebRTC Mesh (Navegador)';
     // Em modo navegador normal, esconde os botões de janela do sistema
@@ -584,11 +595,8 @@ function setupLobbyInputs() {
 }
 
 // ============================================================================
-// GESTÃO DE SALAS CRIADAS / RECENTES NO LOBBY (Máximo 2 salas por vez)
+// GESTÃO DE SALAS CRIADAS / RECENTES NO LOBBY (Funções)
 // ============================================================================
-let currentRoomPage = 0;
-const ROOMS_PER_PAGE = 2; // Exatamente no máximo 2 salas visíveis por vez
-
 function setupLobbyRoomsList() {
   renderLobbyRooms();
 
@@ -2101,6 +2109,67 @@ function showLayoutNotification(message) {
   }, 2200);
 }
 
+function showUpdateBanner(info) {
+  const existing = document.getElementById('app-update-banner');
+  if (existing) existing.remove();
+
+  const banner = document.createElement('div');
+  banner.id = 'app-update-banner';
+  banner.style.cssText = `
+    position: fixed;
+    top: 38px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(135deg, #5865f2 0%, #4752c4 100%);
+    color: #fff;
+    padding: 10px 18px;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+    z-index: 99999;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 13px;
+    font-weight: 600;
+  `;
+  banner.innerHTML = `
+    <span>🚀 Nova versão <strong>v${escapeHtml(info?.version || '1.0.1')}</strong> pronta para instalar!</span>
+    <button id="btn-restart-update" style="
+      background: #fff;
+      color: #5865f2;
+      border: none;
+      font-weight: 700;
+      padding: 6px 12px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 12px;
+    ">Reiniciar e Atualizar</button>
+    <button id="btn-dismiss-update" style="
+      background: transparent;
+      border: none;
+      color: rgba(255,255,255,0.8);
+      cursor: pointer;
+      font-size: 14px;
+      padding: 2px;
+    ">✕</button>
+  `;
+  document.body.appendChild(banner);
+
+  const btnRestart = banner.querySelector('#btn-restart-update');
+  if (btnRestart) {
+    btnRestart.onclick = () => {
+      if (window.electronAPI && typeof window.electronAPI.restartAndInstallUpdate === 'function') {
+        window.electronAPI.restartAndInstallUpdate();
+      }
+    };
+  }
+
+  const btnDismiss = banner.querySelector('#btn-dismiss-update');
+  if (btnDismiss) {
+    btnDismiss.onclick = () => banner.remove();
+  }
+}
+
 function updateAvatarVisuals() {
   const initial = (state.userName || 'A')[0].toUpperCase();
   document.getElementById('local-avatar-letter').textContent = initial;
@@ -3222,3 +3291,13 @@ async function confirmScreenShare() {
     showLayoutNotification('Compartilhamento de tela cancelado.');
   }
 }
+
+// ============================================================================
+// PONTO DE ENTRADA DO APLICATIVO
+// ============================================================================
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initApp);
+} else {
+  initApp();
+}
+

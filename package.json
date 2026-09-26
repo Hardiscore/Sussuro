@@ -1,9 +1,14 @@
 {
   "name": "sussurro-rpg",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Sussurro - Aplicativo de chamadas de voz e vídeo em grupo",
   "author": "Hardiscore",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Hardiscore/Sussuro.git"
+  },
+  "homepage": "https://github.com/Hardiscore/Sussuro#readme",
   "main": "main.cjs",
   "type": "module",
   "scripts": {
@@ -16,20 +21,25 @@
     "clean": "rm -rf dist server.js release",
     "lint": "tsc --noEmit",
     "build:electron": "electron-builder --win",
-    "dist": "electron-builder --win --x64"
+    "dist": "electron-builder --win --x64",
+    "dist:publish": "electron-builder --win --x64 -p always"
   },
   "build": {
     "appId": "com.sussurro.rpg",
     "productName": "Sussurro RPG",
     "npmRebuild": false,
-    "publish": {
-      "provider": "github",
-      "owner": "Hardiscore",
-      "repo": "sussurro-rpg"
-    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Hardiscore",
+        "repo": "Sussuro",
+        "releaseType": "release"
+      }
+    ],
     "asar": true,
     "asarUnpack": [
-      "**/node_modules/uiohook-napi/**/*"
+      "**/node_modules/uiohook-napi/**/*",
+      "noise-suppressor.js"
     ],
     "directories": {
       "output": "release"
@@ -43,11 +53,15 @@
       "styles.css",
       "app.js",
       "webrtc.js",
+      "noise-suppressor.js",
       "firebase-config.js",
       "package.json",
-      "node_modules/uiohook-napi/**/*"
+      "public/**/*",
+      "node_modules/uiohook-napi/**/*",
+      "node_modules/@shiguredo/**/*"
     ],
     "win": {
+      "requestedExecutionLevel": "requireAdministrator",
       "target": [
         {
           "target": "nsis",
@@ -61,6 +75,7 @@
     },
     "nsis": {
       "oneClick": false,
+      "perMachine": true,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,

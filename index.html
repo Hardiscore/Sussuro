@@ -505,42 +505,51 @@
           <div class="ice-card" style="margin-top: 20px;">
             <div class="ice-card-header">
               <div style="display: flex; align-items: center; gap: 8px;">
-                <span class="ice-title">Supressão de Ruído (Otimizado para RPG)</span>
-                <span class="tag-free">100% Gratuito</span>
+                <span class="ice-title">Supressão de Ruído (Otimizado para Sessões de RPG)</span>
+                <span class="tag-free">3 Modos</span>
               </div>
               <span id="noise-gate-indicator-badge" class="tag-free" style="background: rgba(35, 165, 90, 0.15); color: var(--accent-green);">🎙️ Voz Transmitindo</span>
             </div>
             
             <p style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;">
-              Escolha o supressor de ruído. O <strong>RNNoise (IA Neural)</strong> é recomendado para RPG, pois remove chiados sem cortar sussurros ou efeitos sonoros. Os modos são mutuamente exclusivos.
+              Selecione o filtro ideal para a sua mesa de RPG. O <strong>Portão de Ruído</strong> permite sussurrar e fazer efeitos de voz com a boca sem cortes acidentais.
             </p>
 
             <div class="form-group" style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px;">
               <label class="role-option" style="cursor: pointer;">
-                <input type="radio" name="noise-suppression-mode" value="rnnoise" checked style="accent-color: var(--accent-blurple);" />
-                <span><strong>RNNoise (Rede Neural / IA de Voz - Padrão)</strong><br/><small style="color: var(--text-muted); font-weight: normal;">Elimina chiado e ventoinhas preservando sussurros e a dinâmica vocal de RPG.</small></span>
-              </label>
-              
-              <label class="role-option" style="cursor: pointer;">
-                <input type="radio" name="noise-suppression-mode" value="noisegate" style="accent-color: var(--accent-blurple);" />
-                <span><strong>Portão de Ruído (Noise Gate Tradicional)</strong><br/><small style="color: var(--text-muted); font-weight: normal;">Corta o áudio abaixo de um limiar de volume (pode cortar sussurros baixos).</small></span>
+                <input type="radio" name="noise-suppression-mode" value="noisegate" checked style="accent-color: var(--accent-blurple);" />
+                <div>
+                  <strong>1. Portão de Ruído (Noise Gate Customizável) - Recomendado para RPG</strong><br/>
+                  <small style="color: var(--text-muted); font-weight: normal;">Corta ruídos de fundo contínuos sem distorcer sua voz. Permite regular a sensibilidade para captar sussurros e efeitos sonoros.</small>
+                </div>
               </label>
 
               <label class="role-option" style="cursor: pointer;">
                 <input type="radio" name="noise-suppression-mode" value="none" style="accent-color: var(--accent-blurple);" />
-                <span><strong>Nenhum (Áudio 100% Cru)</strong><br/><small style="color: var(--text-muted); font-weight: normal;">Sem supressão. Ideal para testes de áudio, efeitos especiais e vozes complexas.</small></span>
+                <div>
+                  <strong>2. Áudio Natural / Sem Filtro (Efeitos e Sussurros Livres)</strong><br/>
+                  <small style="color: var(--text-muted); font-weight: normal;">Áudio 100% puro do microfone. Perfeito para interpretação dramática, imitações de monstros e efeitos pela boca sem cortes.</small>
+                </div>
+              </label>
+
+              <label class="role-option" style="cursor: pointer;">
+                <input type="radio" name="noise-suppression-mode" value="rnnoise" style="accent-color: var(--accent-blurple);" />
+                <div>
+                  <strong>3. RNNoise (Supressor de Ruído por IA Neural)</strong><br/>
+                  <small style="color: var(--text-muted); font-weight: normal;">Supressão agressiva para ambientes barulhentos (teclados mecânicos/rua). <em>Aviso: Pode atenuar sussurros muito baixos ou efeitos de boca de RPG.</em></small>
+                </div>
               </label>
             </div>
 
-            <div class="form-group" style="margin-bottom: 0; display: none;" id="noise-gate-slider-group">
+            <div class="form-group" style="margin-bottom: 0;" id="noise-gate-slider-group">
               <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
                 <label class="form-label" style="margin: 0;" for="slider-noise-gate">Sensibilidade do Portão de Ruído (Noise Gate):</label>
                 <span id="noise-gate-threshold-val" style="font-family: monospace; font-size: 13px; font-weight: 700; color: var(--accent-gold);">14</span>
               </div>
               <input type="range" id="slider-noise-gate" class="tile-volume-slider" min="2" max="40" value="14" step="1" />
               <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-top: 4px;">
-                <span>Mais sensível (sala silenciosa)</span>
-                <span>Corte agressivo (teclado / ventilador)</span>
+                <span>Mais sensível (capta sussurros e efeitos baixos)</span>
+                <span>Corte firme (bloqueia ventoinhas e teclados)</span>
               </div>
             </div>
           </div>

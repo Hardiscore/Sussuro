@@ -163,18 +163,42 @@ app.whenReady().then(() => {
   // Verificação e Notificação de Atualizações via GitHub Releases
   if (app.isPackaged && autoUpdater) {
     try {
-      autoUpdater.checkForUpdatesAndNotify();
+      autoUpdater.autoDownload = true;
+      autoUpdater.autoInstallOnAppQuit = true;
+      autoUpdater.setFeedURL({
+        provider: 'github',
+        owner: 'Hardiscore',
+        repo: 'Sussuro'
+      });
+
+      autoUpdater.on('checking-for-update', () => {
+        console.log('[AutoUpdater] Verificando atualizações no GitHub...');
+      });
 
       autoUpdater.on('update-available', (info) => {
+        console.log('[AutoUpdater] Nova versão encontrada:', info.version);
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('app-update-available', info);
         }
       });
 
+      autoUpdater.on('update-not-available', () => {
+        console.log('[AutoUpdater] O aplicativo já está na versão mais recente.');
+      });
+
       autoUpdater.on('update-downloaded', (info) => {
+        console.log('[AutoUpdater] Atualização baixada com sucesso:', info.version);
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('app-update-downloaded', info);
         }
+      });
+
+      autoUpdater.on('error', (err) => {
+        console.warn('[AutoUpdater] Erro no autoUpdater:', err.message);
+      });
+
+      autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+        console.warn('[AutoUpdater] Falha na chamada checkForUpdatesAndNotify:', err.message);
       });
     } catch (updateErr) {
       console.warn('[AutoUpdater] Erro ao buscar atualizações:', updateErr);
