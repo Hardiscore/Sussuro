@@ -12,10 +12,14 @@ permissions:
 jobs:
   build-and-publish:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Baixar Código do Repositório
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Configurar Node.js
         uses: actions/setup-node@v4
@@ -31,4 +35,5 @@ jobs:
       - name: Empacotar e Publicar no GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --x64 --publish always
