@@ -6,7 +6,7 @@
  */
 
 import { TavernWebRTC, getSavedIceServers, saveIceServers, DEFAULT_ICE_SERVERS } from './webrtc.js';
-import { getStoredFirebaseConfig, saveFirebaseConfig, resetFirebaseConfig } from './firebase-config.js';
+import { getStoredFirebaseConfig, saveFirebaseConfig, resetFirebaseConfig, BUILTIN_FIREBASE_CONFIG } from './firebase-config.js';
 
 const STORAGE_KEYS = {
   USERNAME: 'tavern_username',
@@ -595,13 +595,122 @@ function setupLobbyInputs() {
 }
 
 // ============================================================================
-// GESTÃO DE SALAS CRIADAS / RECENTES NO LOBBY (Funções)
+// GESTÃO DE SALAS ATIVAS NO FIREBASE (Salas que já têm pessoas conectadas)
 // ============================================================================
-function setupLobbyRoomsList() {
-  renderLobbyRooms();
+let activeFirebaseRooms = [];
+let isLoadingRooms = false;
+let activeRoomsPollTimer = null;
 
+async function fetchActiveRoomsFromFirebase() {
+  if (isLoadingRooms) return;
+  isLoadingRooms = true;
+  renderLobbyRoomsLoading();
+
+  const refreshIcon = document.getElementById('icon-room-refresh');
+  if (refreshIcon) refreshIcon.classList.add('spin-animation');
+
+  const cfg = getStoredFirebaseConfig();
+  const dbUrl = (cfg?.databaseURL || BUILTIN_FIREBASE_CONFIG.databaseURL || 'https://sussurro-4ef44-default-rtdb.firebaseio.com').replace(/\/$/, '');
+
+  let foundRooms = [];
+
+  try {
+    // Timeout resiliente com AbortController (4.5s) para GARANTIR que a interface nunca trave
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 4500);
+
+    const res = await fetch(`${dbUrl}/rooms.json?shallow=true`, {
+      signal: controller.signal
+    });
+
+    if (res.ok) {
+      const roomKeysObj = await res.json();
+      if (roomKeysObj && typeof roomKeysObj === 'object') {
+        const roomIds = Object.keys(roomKeysObj);
+
+        // Busca dados dos participantes de cada sala em paralelo com timeout individual
+        const peerPromises = roomIds.map(async (roomId) => {
+          try {
+            const peerCtrl = new AbortController();
+            const pTimeout = setTimeout(() => peerCtrl.abort(), 3500);
+            const pRes = await fetch(`${dbUrl}/rooms/${encodeURIComponent(roomId)}/peers.json`, {
+              signal: peerCtrl.signal
+            });
+            clearTimeout(pTimeout);
+
+            if (pRes.ok) {
+              const peersData = await pRes.json();
+              if (peersData && typeof peersData === 'object') {
+                const peerIds = Object.keys(peersData);
+                if (peerIds.length > 0) {
+                  const peerList = peerIds.map(pid => {
+                    const p = peersData[pid];
+                    return {
+                      id: pid,
+                      name: p?.name || 'Aventureiro',
+                      role: p?.role || 'jogador',
+                      joinedAt: p?.joinedAt || Date.now()
+                    };
+                  });
+
+                  return {
+                    id: roomId,
+                    name: roomId.replace(/[-_]/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
+                    peerCount: peerList.length,
+                    peers: peerList,
+                    latestActivity: Math.max(...peerList.map(p => p.joinedAt || 0), Date.now())
+                  };
+                }
+              }
+            }
+          } catch (e) {
+            // Falha individual na sala ignorada silenciosamente para preservar outras
+          }
+          return null;
+        });
+
+        const settled = await Promise.allSettled(peerPromises);
+        foundRooms = settled
+          .filter(s => s.status === 'fulfilled' && s.value !== null)
+          .map(s => s.value);
+
+        // Ordena por maior número de aventureiros online e atividade recente
+        foundRooms.sort((a, b) => b.peerCount - a.peerCount || b.latestActivity - a.latestActivity);
+      }
+    }
+    clearTimeout(timeoutId);
+  } catch (err) {
+    console.warn('[Firebase] Não foi possível consultar salas ativas (timeout ou rede):', err);
+  } finally {
+    isLoadingRooms = false;
+    activeFirebaseRooms = foundRooms;
+    if (refreshIcon) refreshIcon.classList.remove('spin-animation');
+
+    const maxPages = Math.max(1, Math.ceil(activeFirebaseRooms.length / ROOMS_PER_PAGE));
+    if (currentRoomPage >= maxPages) {
+      currentRoomPage = 0;
+    }
+    renderLobbyRooms();
+  }
+}
+
+function renderLobbyRoomsLoading() {
+  const container = document.getElementById('lobby-rooms-list');
+  if (!container) return;
+  container.innerHTML = `
+    <div class="lobby-rooms-empty">
+      <svg class="spin-animation" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blurple)" stroke-width="2.5">
+        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+      </svg>
+      <span style="margin-top: 6px; font-weight: 500;">Pesquisando salas com aventureiros no Firebase...</span>
+    </div>
+  `;
+}
+
+function setupLobbyRoomsList() {
   const btnPrev = document.getElementById('btn-room-prev');
   const btnNext = document.getElementById('btn-room-next');
+  const btnRefresh = document.getElementById('btn-room-refresh');
 
   if (btnPrev) {
     btnPrev.onclick = () => {
@@ -614,14 +723,30 @@ function setupLobbyRoomsList() {
 
   if (btnNext) {
     btnNext.onclick = () => {
-      const rooms = StorageService.getSavedRooms();
-      const maxPages = Math.ceil(rooms.length / ROOMS_PER_PAGE);
+      const maxPages = Math.ceil(activeFirebaseRooms.length / ROOMS_PER_PAGE);
       if (currentRoomPage < maxPages - 1) {
         currentRoomPage++;
         renderLobbyRooms();
       }
     };
   }
+
+  if (btnRefresh) {
+    btnRefresh.onclick = () => {
+      fetchActiveRoomsFromFirebase();
+    };
+  }
+
+  // Busca inicial no Firebase
+  fetchActiveRoomsFromFirebase();
+
+  // Polling automático suave a cada 25 segundos enquanto estiver no Lobby
+  if (activeRoomsPollTimer) clearInterval(activeRoomsPollTimer);
+  activeRoomsPollTimer = setInterval(() => {
+    if (!state.isInCall) {
+      fetchActiveRoomsFromFirebase();
+    }
+  }, 25000);
 }
 
 function renderLobbyRooms() {
@@ -633,8 +758,7 @@ function renderLobbyRooms() {
 
   if (!container) return;
 
-  const rooms = StorageService.getSavedRooms();
-  const totalRooms = rooms.length;
+  const totalRooms = activeFirebaseRooms.length;
   const maxPages = Math.max(1, Math.ceil(totalRooms / ROOMS_PER_PAGE));
 
   if (currentRoomPage >= maxPages) {
@@ -651,39 +775,43 @@ function renderLobbyRooms() {
   if (totalRooms === 0) {
     container.innerHTML = `
       <div class="lobby-rooms-empty">
-        <span>Nenhuma sala salva recentemente. Crie ou entre em uma sala acima!</span>
+        <span style="font-size: 16px; margin-bottom: 2px;">🛡️</span>
+        <span style="font-weight: 500;">Nenhuma sala com pessoas online no momento.</span>
+        <span style="font-size: 10.5px; color: var(--text-muted); margin-top: 2px;">Crie ou digite um ID acima para começar sua mesa de RPG!</span>
       </div>
     `;
     return;
   }
 
-  const pageRooms = rooms.slice(currentRoomPage * ROOMS_PER_PAGE, (currentRoomPage + 1) * ROOMS_PER_PAGE);
+  const pageRooms = activeFirebaseRooms.slice(currentRoomPage * ROOMS_PER_PAGE, (currentRoomPage + 1) * ROOMS_PER_PAGE);
 
   container.innerHTML = pageRooms.map(room => {
-    const roomId = typeof room === 'string' ? room : room.id;
-    const roomName = (typeof room === 'object' && room.name) ? room.name : roomId;
-    const timeAgo = (typeof room === 'object' && room.createdAt) ? formatTimeAgo(room.createdAt) : 'Recente';
+    const roomId = room.id;
+    const roomName = room.name || roomId;
+    const count = room.peerCount || 1;
+    const countText = count === 1 ? '1 online' : `${count} online`;
+    const memberNames = (room.peers || []).map(p => p.name).slice(0, 3).join(', ');
 
     return `
       <div class="lobby-room-card" data-room-id="${escapeHtml(roomId)}">
         <div class="lobby-room-info">
           <div class="lobby-room-name" title="${escapeHtml(roomName)}">
             <span>🏰</span>
-            <span>${escapeHtml(roomName)}</span>
+            <span style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(roomName)}</span>
+            <span class="badge-active-peers" title="${countText} no momento">
+              <span class="badge-active-peers-dot"></span>
+              ${countText}
+            </span>
           </div>
           <div class="lobby-room-meta">
             <span>ID: <code>${escapeHtml(roomId)}</code></span>
-            <span>•</span>
-            <span>${escapeHtml(timeAgo)}</span>
+            ${memberNames ? `<span>•</span><span title="${escapeHtml(memberNames)}" style="max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(memberNames)}</span>` : ''}
           </div>
         </div>
         <div class="lobby-room-actions">
           <button type="button" class="btn-join-saved-room" title="Entrar nesta sala imediatamente">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             <span>Entrar</span>
-          </button>
-          <button type="button" class="btn-delete-saved-room" title="Remover da lista">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           </button>
         </div>
       </div>
@@ -694,22 +822,12 @@ function renderLobbyRooms() {
   container.querySelectorAll('.lobby-room-card').forEach(card => {
     const roomId = card.getAttribute('data-room-id');
     const joinBtn = card.querySelector('.btn-join-saved-room');
-    const delBtn = card.querySelector('.btn-delete-saved-room');
 
     if (joinBtn) {
       joinBtn.onclick = (e) => {
         e.stopPropagation();
         if (roomInput) roomInput.value = roomId;
-        StorageService.saveRoom(roomId);
         startCall(roomId);
-      };
-    }
-
-    if (delBtn) {
-      delBtn.onclick = (e) => {
-        e.stopPropagation();
-        StorageService.deleteRoom(roomId);
-        renderLobbyRooms();
       };
     }
 
@@ -1098,7 +1216,7 @@ function leaveCall() {
   document.getElementById('no-audio-warning-banner')?.classList.add('hidden');
   document.getElementById('call-screen').classList.add('hidden');
   document.getElementById('lobby-screen').classList.remove('hidden');
-  renderLobbyRooms();
+  fetchActiveRoomsFromFirebase();
   initLobbyPreview();
 }
 
@@ -2633,7 +2751,7 @@ function setupCallControls() {
     });
   }
 
-  // Compartilhar Tela (Abre modal no Electron ou getDisplayMedia direto no navegador web)
+  // Compartilhar Tela (Abre modal para configuração de áudio, qualidade e instruções)
   btnShareScreen.addEventListener('click', async () => {
     if (!state.webrtc) return;
     if (state.webrtc.isScreenSharing) {
@@ -2642,28 +2760,7 @@ function setupCallControls() {
       btnShareScreen.setAttribute('data-tooltip', 'Compartilhar Tela');
       showLayoutNotification('Transmissão de tela finalizada.');
     } else {
-      if (window.electronAPI && typeof window.electronAPI.getDesktopSources === 'function') {
-        openScreenShareModal();
-      } else {
-        const isSharing = await state.webrtc.startScreenShare({
-          sourceType: 'screen',
-          includeAudio: true,
-          includeMic: true,
-          width: 1920,
-          height: 1080,
-          frameRate: 30,
-          title: 'Tela Inteira'
-        });
-        if (isSharing) {
-          btnShareScreen.classList.add('active-danger');
-          btnShareScreen.setAttribute('data-tooltip', 'Parar Compartilhamento de Tela');
-          if (state.webrtc.hasScreenAudio) {
-            showLayoutNotification('🖥️ Transmissão iniciada COM ÁUDIO do sistema/guia!');
-          } else {
-            showLayoutNotification('⚠️ Transmissão iniciada SEM ÁUDIO capturado. Dica: Na janela de escolha do navegador, marque "Compartilhar áudio do sistema" ou escolha uma "Guia do Chrome".');
-          }
-        }
-      }
+      openScreenShareModal();
     }
   });
 
@@ -2847,6 +2944,24 @@ function setupSettingsModal() {
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
       closeSettingsModal();
+    }
+
+    // Atalho secreto Ctrl+Shift+C para desocultar a aba de Rede e Conexão caso necessário
+    if (e.ctrlKey && e.shiftKey && (e.key === 'C' || e.key === 'c' || e.code === 'KeyC')) {
+      e.preventDefault();
+      const navTabIce = document.getElementById('nav-tab-ice');
+      if (navTabIce) {
+        const isHidden = window.getComputedStyle(navTabIce).display === 'none' || navTabIce.style.display === 'none';
+        if (isHidden) {
+          navTabIce.style.display = 'flex';
+          openSettingsModal('tab-ice');
+          showPresenceToast('Aba "Rede e Conexão" desocultada', 'join');
+        } else {
+          navTabIce.style.display = 'none';
+          openSettingsModal('tab-mic');
+          showPresenceToast('Aba "Rede e Conexão" ocultada', 'leave');
+        }
+      }
     }
   });
 
@@ -3108,6 +3223,7 @@ function setupScreenShareModal() {
   if (tabScreens) {
     tabScreens.onclick = () => {
       state.selectedScreenTab = 'screen';
+      state.selectedScreenSource = state.screenShareSources?.screens?.[0] || null;
       tabScreens.classList.add('active');
       tabWindows?.classList.remove('active');
       renderScreenShareSources();
@@ -3117,6 +3233,7 @@ function setupScreenShareModal() {
   if (tabWindows) {
     tabWindows.onclick = () => {
       state.selectedScreenTab = 'window';
+      state.selectedScreenSource = state.screenShareSources?.windows?.[0] || null;
       tabWindows.classList.add('active');
       tabScreens?.classList.remove('active');
       renderScreenShareSources();

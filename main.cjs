@@ -27,14 +27,10 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 // Garante que o áudio de outros jogadores toque sempre sem bloqueio de Autoplay
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
-// Aceleração de Hardware por GPU (transfere decodificação de vídeo e renderização para a placa de vídeo)
+// Aceleração de Hardware por GPU estável
 app.commandLine.appendSwitch('enable-gpu-rasterization');
-app.commandLine.appendSwitch('enable-zero-copy');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
 app.commandLine.appendSwitch('enable-hardware-overlays');
-app.commandLine.appendSwitch('enable-native-gpu-memory-buffers');
-app.commandLine.appendSwitch('use-angle', 'd3d11');
-app.commandLine.appendSwitch('enable-features', 'VaapiVideoDecoder,PlatformHEVCDecoderSupport');
 
 // Suporte a eventos globais de mouse via uiohook-napi
 let uIOhook = null;
@@ -88,6 +84,34 @@ function createWindow() {
       callback(false);
     }
   });
+
+  // Suporte oficial do Electron (Electron 17+) para getDisplayMedia com suporte completo a janelas e telas
+  if (typeof session.defaultSession.setDisplayMediaRequestHandler === 'function') {
+    session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+      desktopCapturer.getSources({ types: ['screen', 'window'] }).then((sources) => {
+        let chosen = null;
+        if (currentSelectedSourceId) {
+          chosen = sources.find(s => s.id === currentSelectedSourceId);
+        }
+        if (!chosen) {
+          chosen = sources.find(s => s.id.startsWith('screen:')) || sources[0];
+        }
+        if (chosen) {
+          const isScreen = chosen.id.startsWith('screen:');
+          const result = { video: chosen };
+          if (isScreen && request.audioRequested) {
+            result.audio = 'loopback';
+          }
+          callback(result);
+        } else {
+          callback({});
+        }
+      }).catch((err) => {
+        console.warn('[ScreenCapture] Erro em setDisplayMediaRequestHandler:', err);
+        callback({});
+      });
+    });
+  }
 
   // Determina se deve carregar servidor local (dev) ou o arquivo index.html direto
   if (app.isPackaged) {
@@ -253,6 +277,12 @@ ipcMain.on('open-external', (event, url) => {
 });
 
 // Suporte para capturar janelas/telas no Electron
+let currentSelectedSourceId = null;
+
+ipcMain.on('set-selected-source-id', (event, sourceId) => {
+  currentSelectedSourceId = sourceId;
+});
+
 ipcMain.handle('get-desktop-sources', async () => {
   try {
     const sources = await desktopCapturer.getSources({

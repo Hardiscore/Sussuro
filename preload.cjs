@@ -18,6 +18,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Utilitários de Sistema
   openExternal: (url) => ipcRenderer.send('open-external', url),
   getDesktopSources: () => ipcRenderer.invoke('get-desktop-sources'),
+  setSelectedSourceId: (sourceId) => ipcRenderer.send('set-selected-source-id', sourceId),
 
   // Atalhos Globais de Sistema (Push-to-Talk e Muto mesmo com janela minimizada ou em segundo plano)
   registerGlobalHotkey: (config) => ipcRenderer.send('register-global-hotkey', config),

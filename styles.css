@@ -520,6 +520,39 @@ main#app-container > section#lobby-screen .lobby-subtitle,
   border-radius: var(--radius-md);
   text-align: center;
   background: rgba(0, 0, 0, 0.1);
+  min-height: 70px;
+}
+
+.badge-active-peers {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: #23a55a;
+  background: rgba(35, 165, 90, 0.15);
+  border: 1px solid rgba(35, 165, 90, 0.3);
+  padding: 1px 6px;
+  border-radius: 10px;
+  margin-left: 6px;
+}
+
+.badge-active-peers-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: #23a55a;
+  box-shadow: 0 0 6px #23a55a;
+  display: inline-block;
+}
+
+@keyframes spin-anim {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.spin-animation {
+  animation: spin-anim 0.8s linear infinite;
 }
 
 /* ==========================================

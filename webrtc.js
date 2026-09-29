@@ -272,37 +272,68 @@ export class TavernWebRTC {
       if (!AudioCtx) return;
 
       this.audioContext = new AudioCtx();
+      if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume().catch(() => {});
+      }
+      this.rawAudioStream = stream;
+      this.rawAudioTrack = stream.getAudioTracks()[0];
+
       const source = this.audioContext.createMediaStreamSource(stream);
 
       // Filtro passa-altas para remover zumbidos elétricos (< 80Hz) e vibrações de mesa
       this.highpassFilter = this.audioContext.createBiquadFilter();
       this.highpassFilter.type = 'highpass';
-      this.highpassFilter.frequency.setValueAtTime(80, this.audioContext.currentTime);
+      this.highpassFilter.frequency.setValueAtTime(this.noiseSuppressionMode === 'none' ? 10 : 80, this.audioContext.currentTime);
 
-      // GainNode para Noise Gate suave (sem cortes secos)
+      // GainNode para Noise Gate e atenuação real de ruído
       this.noiseGateGain = this.audioContext.createGain();
       this.noiseGateGain.gain.setValueAtTime(1.0, this.audioContext.currentTime);
 
+      // Analisador pré-gate para medir a voz do microfone com precisão contínua
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = 1024;
       const timeData = new Uint8Array(this.analyser.fftSize);
 
-      source.connect(this.highpassFilter);
-      this.highpassFilter.connect(this.noiseGateGain);
-      this.noiseGateGain.connect(this.analyser);
+      // Destino Web Audio: gera o track de áudio processado que será transmitido via WebRTC aos participantes
+      this.audioDestination = this.audioContext.createMediaStreamDestination();
 
-      // Carregamento resiliente do AudioWorklet de supressão de ruído (com proteção contra travamento)
-      if (this.audioContext.audioWorklet) {
-        this.audioContext.audioWorklet.addModule('./noise-suppressor.js')
-          .then(() => {
-            console.log('[WebRTC] AudioWorklet de supressão de ruído ativo com sucesso.');
-          })
-          .catch((workletErr) => {
-            console.warn('[WebRTC] AudioWorklet noise-suppressor.js utilizou fallback Web Audio:', workletErr.message);
-          });
+      // CONEXÃO DE ÁUDIO CORRETA:
+      // O analisador é conectado no sinal de entrada (pré-gate) para nunca parar de detectar voz quando o portão fechar!
+      source.connect(this.highpassFilter);
+      this.highpassFilter.connect(this.analyser);
+      this.highpassFilter.connect(this.noiseGateGain);
+      this.noiseGateGain.connect(this.audioDestination);
+
+      const processedTrack = this.audioDestination.stream.getAudioTracks()[0];
+      if (processedTrack) {
+        this.processedAudioTrack = processedTrack;
+        this.processedAudioTrack.enabled = !this.userInfo.audioMuted;
+
+        if (this.localStream) {
+          const oldTrack = this.localStream.getAudioTracks()[0];
+          if (oldTrack && oldTrack !== this.processedAudioTrack) {
+            this.localStream.removeTrack(oldTrack);
+          }
+          this.localStream.addTrack(this.processedAudioTrack);
+        }
+
+        // Atualiza a faixa nos peer senders WebRTC já conectados
+        for (const [peerId, peer] of this.peers.entries()) {
+          if (peer.connection) {
+            const senders = peer.connection.getSenders();
+            const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+            if (audioSender) {
+              audioSender.replaceTrack(this.processedAudioTrack).catch(e => console.warn('[WebRTC] Erro ao substituir track no sender:', e));
+            }
+          }
+        }
       }
 
+      // Aplica restrições iniciais do modo selecionado
+      this.setNoiseSuppressionMode(this.noiseSuppressionMode);
+
       let wasSpeaking = false;
+      let lastSpokeTime = 0;
 
       if (this.audioMeterInterval) clearInterval(this.audioMeterInterval);
 
@@ -314,6 +345,9 @@ export class TavernWebRTC {
             this.broadcastMetadata();
             this.onSpeakingState('local', false, 0);
             this.onNoiseGateState(false, 0, this.noiseGateThreshold);
+          }
+          if (this.noiseGateGain && this.audioContext) {
+            this.noiseGateGain.gain.setTargetAtTime(0.0, this.audioContext.currentTime, 0.02);
           }
           return;
         }
@@ -328,19 +362,37 @@ export class TavernWebRTC {
         const level = Math.round(rms * 100); // 0 a 100+
 
         const isGateMode = this.noiseSuppressionMode === 'noisegate';
+        const isRnnoise = this.noiseSuppressionMode === 'rnnoise';
+        const isNone = this.noiseSuppressionMode === 'none';
+
         const threshold = this.noiseGateThreshold;
-        const activeThreshold = isGateMode ? threshold : 4;
+        const activeThreshold = isGateMode ? threshold : (isRnnoise ? Math.max(5, threshold - 4) : 3);
         const isSpeaking = level > activeThreshold;
 
-        // Aplica ganho suave se estiver em modo Noise Gate
-        if (this.audioContext && this.noiseGateGain) {
-          const targetGain = isGateMode ? (isSpeaking ? 1.0 : 0.05) : 1.0;
-          this.noiseGateGain.gain.setTargetAtTime(targetGain, this.audioContext.currentTime, 0.04);
+        if (isSpeaking) {
+          lastSpokeTime = Date.now();
         }
 
-        const audioTrack = this.localStream.getAudioTracks()[0];
-        if (audioTrack && !this.userInfo.audioMuted) {
-          audioTrack.enabled = true;
+        // Hangover: mantém o portão aberto suavemente durante pausas normais na respiração e pontuação (280ms)
+        const hangoverMs = isGateMode ? 280 : 200;
+        const gateIsOpen = isNone || (Date.now() - lastSpokeTime < hangoverMs);
+
+        // Aplica corte de ruído real na saída do áudio transmitido aos outros jogadores
+        if (this.audioContext && this.noiseGateGain) {
+          if (isNone) {
+            this.noiseGateGain.gain.setTargetAtTime(1.0, this.audioContext.currentTime, 0.01);
+          } else if (gateIsOpen) {
+            // Ataque ultra-rápido (8ms) para não cortar a primeira letra/sílaba da fala
+            this.noiseGateGain.gain.setTargetAtTime(1.0, this.audioContext.currentTime, 0.008);
+          } else {
+            // Liberação suave para silêncio completo quando parar de falar (elimina ventiladores e ruídos contínuos)
+            const floorGain = isRnnoise ? 0.0 : 0.005;
+            this.noiseGateGain.gain.setTargetAtTime(floorGain, this.audioContext.currentTime, 0.06);
+          }
+        }
+
+        if (this.processedAudioTrack) {
+          this.processedAudioTrack.enabled = !this.userInfo.audioMuted;
         }
 
         this.onNoiseGateState(isSpeaking, level, activeThreshold);
@@ -351,7 +403,7 @@ export class TavernWebRTC {
           this.broadcastMetadata();
           this.onSpeakingState('local', isSpeaking, level);
         }
-      }, 70);
+      }, 50);
     } catch (err) {
       console.warn('[WebRTC] Não foi possível iniciar analisador de áudio:', err);
     }
@@ -485,10 +537,19 @@ export class TavernWebRTC {
    * Define explicitamente o estado de áudio (ativado ou desativado)
    */
   setAudioEnabled(enabled) {
-    const audioTrack = this.localStream?.getAudioTracks()[0];
     this.userInfo.audioMuted = !enabled;
+    if (enabled && this.audioContext && this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => {});
+    }
+    const audioTrack = this.localStream?.getAudioTracks()[0];
     if (audioTrack) {
       audioTrack.enabled = !!enabled;
+    }
+    if (this.rawAudioTrack) {
+      this.rawAudioTrack.enabled = !!enabled;
+    }
+    if (this.processedAudioTrack) {
+      this.processedAudioTrack.enabled = !!enabled;
     }
     // Se estiver transmitindo tela com mixagem de áudio, controla ganho do microfone no mixer
     if (this.mixerMicGain) {
@@ -624,21 +685,81 @@ export class TavernWebRTC {
 
       // Se executando no Electron e o usuário escolheu uma fonte específica pelo ID do desktopCapturer
       if (sourceId && window.electronAPI) {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: false,
-          video: {
-            mandatory: {
-              chromeMediaSource: 'desktop',
-              chromeMediaSourceId: sourceId,
-              maxWidth: width,
-              maxHeight: height,
-              maxFrameRate: frameRate
+        const isScreen = String(sourceId).startsWith('screen:') || sourceType === 'screen';
+
+        // Comunica ao processo principal do Electron qual fonte foi selecionada no modal
+        if (typeof window.electronAPI.setSelectedSourceId === 'function') {
+          window.electronAPI.setSelectedSourceId(sourceId);
+        }
+
+        // 1. Tenta a API moderna do Electron (getDisplayMedia via setDisplayMediaRequestHandler)
+        // Isso resolve completamente NotReadableError no Windows para janelas de aplicativos
+        try {
+          const displayOpts = {
+            video: {
+              width: { ideal: width, max: 1920 },
+              height: { ideal: height, max: 1080 },
+              frameRate: { ideal: frameRate, max: 60 }
+            }
+          };
+          if (includeAudio && isScreen) {
+            displayOpts.audio = true;
+          }
+          stream = await navigator.mediaDevices.getDisplayMedia(displayOpts);
+        } catch (displayMediaErr) {
+          console.warn('[WebRTC] getDisplayMedia via Electron falhou, tentando método getUserMedia:', displayMediaErr);
+        }
+
+        // 2. Se getDisplayMedia não retornou stream, tenta o método getUserMedia clássico do desktopCapturer
+        if (!stream) {
+          if (includeAudio && isScreen) {
+            try {
+              stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                  mandatory: {
+                    chromeMediaSource: 'desktop'
+                  }
+                },
+                video: {
+                  mandatory: {
+                    chromeMediaSource: 'desktop',
+                    chromeMediaSourceId: sourceId
+                  },
+                  optional: [
+                    { maxWidth: width },
+                    { maxHeight: height },
+                    { maxFrameRate: frameRate }
+                  ]
+                }
+              });
+            } catch (audioErr) {
+              console.warn('[WebRTC] Captura de áudio no Electron falhou, tentando fallback sem áudio:', audioErr);
             }
           }
-        });
+
+          if (!stream) {
+            try {
+              stream = await navigator.mediaDevices.getUserMedia({
+                audio: false,
+                video: {
+                  mandatory: {
+                    chromeMediaSource: 'desktop',
+                    chromeMediaSourceId: sourceId
+                  }
+                }
+              });
+            } catch (winErr) {
+              console.warn('[WebRTC] getUserMedia falhou para janela, tentando seletor do sistema:', winErr);
+              // 3. Fallback final resiliente com getDisplayMedia direto do navegador/Electron
+              stream = await navigator.mediaDevices.getDisplayMedia({
+                video: true,
+                audio: false
+              });
+            }
+          }
+        }
       } else {
-        // Padrão navegador WebRTC (e fallback do Electron)
-        // Quando includeAudio é verdadeiro, não forçamos displaySurface 'window' para permitir captura de som do sistema ou guia
+        // Padrão navegador WebRTC (getDisplayMedia)
         const displayMediaConstraints = {
           video: {
             width: { ideal: width, max: 1920 },
@@ -649,7 +770,8 @@ export class TavernWebRTC {
             echoCancellation: false,
             noiseSuppression: false,
             autoGainControl: false,
-            channelCount: 2
+            channelCount: 2,
+            suppressLocalAudioPlayback: false
           } : false,
           systemAudio: includeAudio ? 'include' : 'exclude',
           selfBrowserSurface: 'include',
@@ -665,8 +787,7 @@ export class TavernWebRTC {
           console.warn('[WebRTC] Tentando getDisplayMedia com constraints padrão:', firstErr);
           stream = await navigator.mediaDevices.getDisplayMedia({
             video: true,
-            audio: includeAudio ? true : false,
-            systemAudio: includeAudio ? 'include' : 'exclude'
+            audio: includeAudio ? true : false
           });
         }
       }
