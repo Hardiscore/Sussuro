@@ -33,7 +33,7 @@
         "provider": "github",
         "owner": "Hardiscore",
         "repo": "Sussuro",
-        "releaseType": "release"
+        "releaseType": "draft"
       }
     ],
     "asar": true,
