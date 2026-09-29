@@ -1,7 +1,7 @@
 {
   "name": "sussurro-rpg",
   "private": true,
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Sussurro - Aplicativo de chamadas de voz e vídeo em grupo",
   "author": "Hardiscore",
   "repository": {
@@ -32,8 +32,7 @@
       {
         "provider": "github",
         "owner": "Hardiscore",
-        "repo": "Sussuro",
-        "releaseType": "draft"
+        "repo": "Sussuro"
       }
     ],
     "asar": true,
@@ -65,10 +64,6 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
-        },
-        {
-          "target": "portable",
           "arch": ["x64"]
         }
       ]
