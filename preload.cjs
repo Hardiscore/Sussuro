@@ -61,15 +61,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // Atualização Automática via GitHub
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  checkForUpdatesManual: () => ipcRenderer.send('check-for-updates-manual'),
+  onUpdateChecking: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('app-update-checking', handler);
+    return () => ipcRenderer.removeListener('app-update-checking', handler);
+  },
   onUpdateAvailable: (callback) => {
     const handler = (_event, info) => callback(info);
     ipcRenderer.on('app-update-available', handler);
     return () => ipcRenderer.removeListener('app-update-available', handler);
   },
+  onUpdateProgress: (callback) => {
+    const handler = (_event, progress) => callback(progress);
+    ipcRenderer.on('app-update-progress', handler);
+    return () => ipcRenderer.removeListener('app-update-progress', handler);
+  },
+  onUpdateNotAvailable: (callback) => {
+    const handler = (_event, info) => callback(info);
+    ipcRenderer.on('app-update-not-available', handler);
+    return () => ipcRenderer.removeListener('app-update-not-available', handler);
+  },
   onUpdateDownloaded: (callback) => {
     const handler = (_event, info) => callback(info);
     ipcRenderer.on('app-update-downloaded', handler);
     return () => ipcRenderer.removeListener('app-update-downloaded', handler);
+  },
+  onUpdateError: (callback) => {
+    const handler = (_event, err) => callback(err);
+    ipcRenderer.on('app-update-error', handler);
+    return () => ipcRenderer.removeListener('app-update-error', handler);
   },
   restartAndInstallUpdate: () => ipcRenderer.send('restart-and-install-update')
 });

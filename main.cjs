@@ -185,10 +185,18 @@ app.whenReady().then(() => {
   }
 
   // Verificação e Notificação de Atualizações via GitHub Releases
+  function sendToRenderer(channel, data) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(channel, data);
+    }
+  }
+
   if (app.isPackaged && autoUpdater) {
     try {
       autoUpdater.autoDownload = true;
       autoUpdater.autoInstallOnAppQuit = true;
+      autoUpdater.logger = console;
+
       autoUpdater.setFeedURL({
         provider: 'github',
         owner: 'Hardiscore',
@@ -197,33 +205,44 @@ app.whenReady().then(() => {
 
       autoUpdater.on('checking-for-update', () => {
         console.log('[AutoUpdater] Verificando atualizações no GitHub...');
+        sendToRenderer('app-update-checking');
       });
 
       autoUpdater.on('update-available', (info) => {
         console.log('[AutoUpdater] Nova versão encontrada:', info.version);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('app-update-available', info);
-        }
+        sendToRenderer('app-update-available', info);
       });
 
-      autoUpdater.on('update-not-available', () => {
+      autoUpdater.on('download-progress', (progressObj) => {
+        console.log(`[AutoUpdater] Progresso do download: ${Math.round(progressObj.percent)}%`);
+        sendToRenderer('app-update-progress', progressObj);
+      });
+
+      autoUpdater.on('update-not-available', (info) => {
         console.log('[AutoUpdater] O aplicativo já está na versão mais recente.');
+        sendToRenderer('app-update-not-available', info);
       });
 
       autoUpdater.on('update-downloaded', (info) => {
         console.log('[AutoUpdater] Atualização baixada com sucesso:', info.version);
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('app-update-downloaded', info);
-        }
+        sendToRenderer('app-update-downloaded', info);
       });
 
       autoUpdater.on('error', (err) => {
         console.warn('[AutoUpdater] Erro no autoUpdater:', err.message);
+        sendToRenderer('app-update-error', { message: err.message });
       });
 
-      autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-        console.warn('[AutoUpdater] Falha na chamada checkForUpdatesAndNotify:', err.message);
-      });
+      // Aguarda o HTML carregar antes de checar atualizações para não perder eventos IPC
+      if (mainWindow) {
+        mainWindow.webContents.once('did-finish-load', () => {
+          setTimeout(() => {
+            autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+              console.warn('[AutoUpdater] Falha na chamada checkForUpdatesAndNotify:', err.message);
+            });
+          }, 1500);
+        });
+      }
     } catch (updateErr) {
       console.warn('[AutoUpdater] Erro ao buscar atualizações:', updateErr);
     }
@@ -242,10 +261,54 @@ app.on('window-all-closed', () => {
   }
 });
 
+// Ação para obter versão atual e status do app
+ipcMain.handle('get-app-version', () => {
+  return {
+    version: app.getVersion(),
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch
+  };
+});
+
+// Ação manual: Procurar Update
+ipcMain.on('check-for-updates-manual', async () => {
+  console.log('[AutoUpdater] Checagem manual solicitada pelo usuário...');
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('app-update-checking');
+  }
+
+  if (autoUpdater && app.isPackaged) {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      if (!result || !result.updateInfo) {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('app-update-not-available', { version: app.getVersion() });
+        }
+      }
+    } catch (err) {
+      console.warn('[AutoUpdater] Erro na checagem manual:', err.message);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('app-update-error', { message: err.message });
+      }
+    }
+  } else {
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('app-update-not-available', {
+          version: app.getVersion(),
+          isDev: !app.isPackaged
+        });
+      }
+    }, 800);
+  }
+});
+
 // Ação para reiniciar e aplicar a nova versão baixada
 ipcMain.on('restart-and-install-update', () => {
   if (autoUpdater) {
-    autoUpdater.quitAndInstall();
+    console.log('[AutoUpdater] Executando quitAndInstall(false, true)...');
+    autoUpdater.quitAndInstall(false, true);
   }
 });
 

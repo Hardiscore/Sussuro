@@ -503,13 +503,33 @@ function setupElectronTitlebar() {
     // Notificações de Atualização Automática via GitHub Releases
     if (typeof window.electronAPI.onUpdateAvailable === 'function') {
       window.electronAPI.onUpdateAvailable((info) => {
-        showLayoutNotification(`📦 Nova versão v${info?.version || ''} detectada no GitHub! Baixando atualização...`);
+        showLayoutNotification(`📦 Nova versão v${info?.version || ''} detectada no GitHub! Baixando atualização em segundo plano...`);
+      });
+    }
+
+    if (typeof window.electronAPI.onUpdateProgress === 'function') {
+      let lastProgressToast = 0;
+      window.electronAPI.onUpdateProgress((progress) => {
+        const now = Date.now();
+        // Atualiza a cada 3 segundos ou quando atingir 100% para não inundar a tela
+        if (now - lastProgressToast > 3000 || progress.percent >= 99) {
+          lastProgressToast = now;
+          const mbDownloaded = (progress.transferred / 1048576).toFixed(1);
+          const mbTotal = (progress.total / 1048576).toFixed(1);
+          showLayoutNotification(`⬇️ Baixando atualização: ${Math.round(progress.percent)}% (${mbDownloaded}MB / ${mbTotal}MB)...`);
+        }
       });
     }
 
     if (typeof window.electronAPI.onUpdateDownloaded === 'function') {
       window.electronAPI.onUpdateDownloaded((info) => {
         showUpdateBanner(info);
+      });
+    }
+
+    if (typeof window.electronAPI.onUpdateError === 'function') {
+      window.electronAPI.onUpdateError((err) => {
+        console.warn('[AutoUpdater UI] Erro:', err);
       });
     }
   } else {
@@ -3161,6 +3181,187 @@ function setupSettingsModal() {
       updateAvatarVisuals();
     };
   });
+
+  // Configuração da aba de Versão e Atualizações
+  setupVersionSettingsTab(modal);
+}
+
+// ============================================================================
+// ABA DE VERSÃO E ATUALIZAÇÕES NAS CONFIGURAÇÕES
+// ============================================================================
+function setupVersionSettingsTab(modal) {
+  const versionPill = document.getElementById('version-pill-badge');
+  const versionText = document.getElementById('version-current-text');
+  const envText = document.getElementById('version-runtime-env');
+  const updatedAtText = document.getElementById('version-updated-at');
+  const btnCheckUpdate = document.getElementById('btn-check-update-manual');
+  const btnCheckText = document.getElementById('btn-check-update-text');
+  const btnInstallNow = document.getElementById('btn-install-update-now');
+  const feedbackBox = document.getElementById('version-feedback-box');
+  const feedbackIcon = document.getElementById('version-feedback-icon');
+  const feedbackMsg = document.getElementById('version-feedback-msg');
+  const progressWrapper = document.getElementById('version-progress-wrapper');
+  const progressLabel = document.getElementById('version-download-status-label');
+  const progressPct = document.getElementById('version-download-pct');
+  const progressBar = document.getElementById('version-download-bar');
+
+  let currentAppVersion = '1.0.5';
+
+  // Obter versão instalada do Electron
+  if (window.electronAPI && typeof window.electronAPI.getAppVersion === 'function') {
+    window.electronAPI.getAppVersion().then(info => {
+      if (info && info.version) {
+        currentAppVersion = info.version;
+        if (versionPill) versionPill.textContent = `v${info.version}`;
+        if (versionText) versionText.innerHTML = `Versão instalada: <strong>v${info.version}</strong>`;
+        if (envText) envText.textContent = info.isPackaged ? 'Desktop Oficial (Electron Windows)' : 'Modo Desenvolvimento (Electron)';
+      }
+    }).catch(() => {});
+  } else {
+    if (envText) envText.textContent = 'Navegador Web / PWA';
+  }
+
+  function setFeedback(icon, message, type = 'info') {
+    if (feedbackIcon) feedbackIcon.textContent = icon;
+    if (feedbackMsg) feedbackMsg.innerHTML = message;
+    if (feedbackBox) {
+      if (type === 'success') {
+        feedbackBox.style.borderColor = 'rgba(35, 165, 90, 0.4)';
+        feedbackBox.style.backgroundColor = 'rgba(35, 165, 90, 0.08)';
+      } else if (type === 'warn') {
+        feedbackBox.style.borderColor = 'rgba(240, 178, 50, 0.4)';
+        feedbackBox.style.backgroundColor = 'rgba(240, 178, 50, 0.08)';
+      } else if (type === 'error') {
+        feedbackBox.style.borderColor = 'rgba(237, 66, 69, 0.4)';
+        feedbackBox.style.backgroundColor = 'rgba(237, 66, 69, 0.08)';
+      } else {
+        feedbackBox.style.borderColor = 'var(--border-subtle)';
+        feedbackBox.style.backgroundColor = 'var(--bg-card)';
+      }
+    }
+  }
+
+  // Listener para o botão de Procurar Update
+  if (btnCheckUpdate) {
+    btnCheckUpdate.onclick = async () => {
+      if (btnCheckText) btnCheckText.textContent = 'procurando...';
+      btnCheckUpdate.disabled = true;
+      setFeedback('🔍', 'Conectando ao GitHub Releases para verificar novidades...', 'info');
+
+      // Se estiver no Electron, dispara a checagem nativa
+      if (window.electronAPI && typeof window.electronAPI.checkForUpdatesManual === 'function') {
+        window.electronAPI.checkForUpdatesManual();
+      }
+
+      // Verificação direta complementar via API pública do GitHub
+      try {
+        const response = await fetch('https://api.github.com/repos/Hardiscore/Sussuro/releases/latest', {
+          headers: { 'Accept': 'application/vnd.github.v3+json' }
+        });
+
+        if (response.ok) {
+          const release = await response.json();
+          const latestTag = (release.tag_name || release.name || '').replace(/^v/, '');
+          const releaseDate = release.published_at ? new Date(release.published_at).toLocaleDateString('pt-BR') : 'Hoje';
+          
+          if (updatedAtText) updatedAtText.textContent = releaseDate;
+
+          const isNewer = compareVersions(latestTag, currentAppVersion) > 0;
+
+          if (isNewer) {
+            setFeedback('📦', `Nova versão <strong>v${latestTag}</strong> encontrada no GitHub (Lançada em ${releaseDate})! Baixando instalador...`, 'success');
+            if (progressWrapper) progressWrapper.classList.remove('hidden');
+          } else {
+            setFeedback('✅', `Você já está utilizando a versão mais recente (<strong>v${currentAppVersion}</strong>). Nenhuma atualização necessária no momento.`, 'success');
+          }
+        } else {
+          setFeedback('ℹ️', `Verificação concluída. Versão atual: <strong>v${currentAppVersion}</strong>.`, 'info');
+        }
+      } catch (err) {
+        console.warn('[VersionTab] Erro ao consultar GitHub API:', err);
+        setFeedback('ℹ️', `Checagem concluída. Versão instalada: <strong>v${currentAppVersion}</strong>.`, 'info');
+      } finally {
+        setTimeout(() => {
+          if (btnCheckText) btnCheckText.textContent = 'procurar update';
+          btnCheckUpdate.disabled = false;
+        }, 1200);
+      }
+    };
+  }
+
+  // Ouvintes de eventos do Electron AutoUpdater
+  if (window.electronAPI) {
+    if (typeof window.electronAPI.onUpdateChecking === 'function') {
+      window.electronAPI.onUpdateChecking(() => {
+        setFeedback('🔍', 'Verificando atualizações no GitHub Releases...', 'info');
+      });
+    }
+
+    if (typeof window.electronAPI.onUpdateAvailable === 'function') {
+      window.electronAPI.onUpdateAvailable((info) => {
+        const newVer = info?.version || '';
+        setFeedback('📦', `Nova versão <strong>v${newVer}</strong> detectada! Baixando atualização em segundo plano...`, 'success');
+        if (progressWrapper) progressWrapper.classList.remove('hidden');
+      });
+    }
+
+    if (typeof window.electronAPI.onUpdateProgress === 'function') {
+      window.electronAPI.onUpdateProgress((progress) => {
+        if (progressWrapper) progressWrapper.classList.remove('hidden');
+        const pct = Math.round(progress.percent || 0);
+        if (progressPct) progressPct.textContent = `${pct}%`;
+        if (progressBar) progressBar.style.width = `${pct}%`;
+        const mbTransferred = (progress.transferred / 1048576).toFixed(1);
+        const mbTotal = (progress.total / 1048576).toFixed(1);
+        if (progressLabel) progressLabel.textContent = `Baixando instalador: ${mbTransferred}MB de ${mbTotal}MB (${pct}%)`;
+      });
+    }
+
+    if (typeof window.electronAPI.onUpdateDownloaded === 'function') {
+      window.electronAPI.onUpdateDownloaded((info) => {
+        const newVer = info?.version || '';
+        setFeedback('🎉', `Atualização <strong>v${newVer}</strong> pronta para instalação!`, 'success');
+        if (progressWrapper) progressWrapper.classList.add('hidden');
+        if (btnInstallNow) btnInstallNow.classList.remove('hidden');
+      });
+    }
+
+    if (typeof window.electronAPI.onUpdateNotAvailable === 'function') {
+      window.electronAPI.onUpdateNotAvailable((info) => {
+        setFeedback('✅', `O Sussurro RPG já está atualizado na versão mais recente (<strong>v${currentAppVersion}</strong>).`, 'success');
+      });
+    }
+
+    if (typeof window.electronAPI.onUpdateError === 'function') {
+      window.electronAPI.onUpdateError((err) => {
+        setFeedback('⚠️', `Aviso na checagem: ${err?.message || 'Falha ao buscar no GitHub.'}`, 'warn');
+      });
+    }
+  }
+
+  // Ação de Reiniciar e Atualizar
+  if (btnInstallNow) {
+    btnInstallNow.onclick = () => {
+      if (window.electronAPI && typeof window.electronAPI.restartAndInstallUpdate === 'function') {
+        btnInstallNow.disabled = true;
+        btnInstallNow.textContent = 'Reiniciando o Sussurro...';
+        window.electronAPI.restartAndInstallUpdate();
+      }
+    };
+  }
+}
+
+function compareVersions(v1, v2) {
+  if (!v1 || !v2) return 0;
+  const parts1 = v1.replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+  const parts2 = v2.replace(/^v/, '').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+    if (p1 > p2) return 1;
+    if (p1 < p2) return -1;
+  }
+  return 0;
 }
 
 function openSettingsModal(targetTabId = null) {

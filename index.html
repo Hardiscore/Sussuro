@@ -428,6 +428,10 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
           <span>Rede e Conexão</span>
         </button>
+        <button class="settings-nav-item" data-tab="tab-version" id="nav-tab-version">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          <span>Versão</span>
+        </button>
       </nav>
 
       <!-- Conteúdo das Abas -->
@@ -689,6 +693,83 @@
               <button class="btn btn-secondary" id="btn-reset-turn" type="button">
                 <span>Restaurar Padrões</span>
               </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ABA 5: VERSÃO E ATUALIZAÇÕES DO APLICATIVO -->
+        <div class="settings-tab-pane" id="tab-version">
+          <h2 class="settings-section-title">Informações de Versão e Atualizações</h2>
+          <p class="settings-section-desc">
+            Consulte a versão instalada no seu computador, data do último lançamento e faça checagem manual de novidades no GitHub.
+          </p>
+
+          <div class="ice-card" style="margin-top: 16px;">
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px;">
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <div style="width: 44px; height: 44px; background: rgba(88, 101, 242, 0.15); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 22px; border: 1px solid rgba(88, 101, 242, 0.3);">
+                  🎲
+                </div>
+                <div>
+                  <div style="font-weight: 700; font-size: 16px; color: var(--text-normal); display: flex; align-items: center; gap: 8px;">
+                    <span>Sussurro RPG</span>
+                    <span id="version-pill-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple); font-size: 11px;">v1.0.4</span>
+                  </div>
+                  <div style="font-size: 13px; color: var(--text-muted); margin-top: 2px;" id="version-current-text">
+                    Versão atual: <strong>v1.0.4</strong>
+                  </div>
+                </div>
+              </div>
+
+              <span class="tag-free" id="version-status-indicator" style="background: rgba(35, 165, 90, 0.15); color: var(--accent-green); font-size: 12px; padding: 4px 10px;">
+                ✓ Ativo
+              </span>
+            </div>
+
+            <div style="border-top: 1px solid var(--border-subtle); padding-top: 14px; margin-top: 10px; display: flex; flex-direction: column; gap: 10px; font-size: 13px; color: var(--text-muted);">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Ambiente de Execução:</span>
+                <strong style="color: var(--text-normal);" id="version-runtime-env">Desktop Oficial (Electron Windows)</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Quando foi atualizado:</span>
+                <strong style="color: var(--accent-gold);" id="version-updated-at">29/09/2026</strong>
+              </div>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span>Canal de Lançamento:</span>
+                <span style="color: var(--accent-blurple); font-weight: 600;">GitHub Releases (Hardiscore/Sussuro)</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Seção de Checagem Manual -->
+          <div style="margin-top: 20px; display: flex; flex-direction: column; gap: 14px;">
+            <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+              <button class="btn btn-primary" id="btn-check-update-manual" type="button" style="padding: 10px 22px; display: flex; align-items: center; gap: 8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/></svg>
+                <span id="btn-check-update-text">procurar update</span>
+              </button>
+              <button class="btn hidden" id="btn-install-update-now" type="button" style="padding: 10px 20px; background: var(--accent-green); color: white; display: flex; align-items: center; gap: 6px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                <span>Instalar e Reiniciar Agora</span>
+              </button>
+            </div>
+
+            <!-- Caixa de Status de Checagem -->
+            <div id="version-feedback-box" style="font-size: 13px; color: var(--text-muted); line-height: 1.5; padding: 12px 16px; background: var(--bg-card); border-radius: var(--radius-sm); border: 1px solid var(--border-subtle); display: flex; align-items: center; gap: 10px;">
+              <span id="version-feedback-icon" style="font-size: 16px;">ℹ️</span>
+              <span id="version-feedback-msg">Clique no botão "procurar update" para buscar novas versões no GitHub.</span>
+            </div>
+
+            <!-- Barra de Progresso de Download -->
+            <div id="version-progress-wrapper" class="hidden" style="margin-top: 6px;">
+              <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 6px; color: var(--text-muted);">
+                <span id="version-download-status-label">Baixando instalador...</span>
+                <span id="version-download-pct" style="font-weight: 700; color: var(--accent-blurple);">0%</span>
+              </div>
+              <div style="width: 100%; height: 8px; background: var(--bg-tertiary); border-radius: 4px; overflow: hidden;">
+                <div id="version-download-bar" style="width: 0%; height: 100%; background: var(--accent-blurple); transition: width 0.2s;"></div>
+              </div>
             </div>
           </div>
         </div>

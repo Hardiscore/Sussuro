@@ -1,7 +1,7 @@
 {
   "name": "sussurro-rpg",
   "private": true,
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Sussurro - Aplicativo de chamadas de voz e vídeo em grupo",
   "author": "Hardiscore",
   "repository": {
@@ -60,7 +60,7 @@
       "node_modules/@shiguredo/**/*"
     ],
     "win": {
-      "requestedExecutionLevel": "requireAdministrator",
+      "requestedExecutionLevel": "asInvoker",
       "target": [
         {
           "target": "nsis",
@@ -70,7 +70,7 @@
     },
     "nsis": {
       "oneClick": false,
-      "perMachine": true,
+      "perMachine": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
