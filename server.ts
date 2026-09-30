@@ -9,6 +9,7 @@ interface PeerInfo {
   audioMuted: boolean;
   videoOff: boolean;
   joinedAt: number;
+  appVersion?: string;
 }
 
 interface RoomPeer {
@@ -22,6 +23,8 @@ interface RoomPeer {
 interface Room {
   id: string;
   peers: Map<string, RoomPeer>;
+  requiredVersion?: string;
+  diceBlockedForAll?: boolean;
 }
 
 const rooms = new Map<string, Room>();
@@ -60,9 +63,18 @@ function broadcastToRoom(room: Room, payload: any, excludePeerId: string = '') {
   }
 }
 
+function getPort(): number {
+  const portIndex = process.argv.indexOf("--port");
+  if (portIndex !== -1 && process.argv[portIndex + 1]) {
+    const val = parseInt(process.argv[portIndex + 1], 10);
+    if (!isNaN(val)) return val;
+  }
+  return Number(process.env.PORT) || 3000;
+}
+
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = getPort();
 
   app.use(express.json());
 
@@ -81,6 +93,23 @@ async function startServer() {
     }
 
     const room = getOrCreateRoom(roomId);
+    const clientVersion = (userInfo && userInfo.appVersion) ? String(userInfo.appVersion).trim() : '1.0.6';
+
+    // Verificação estrita de versão: não permite entrar em sala com versão incompatível
+    if (room.peers.size > 0 && room.requiredVersion && room.requiredVersion !== clientVersion) {
+      console.warn(`[Signaling Server] Entrada negada ao peer ${peerId}: Versão incompatível (${clientVersion} vs ${room.requiredVersion}) na sala "${room.id}"`);
+      return res.status(409).json({
+        error: "VERSION_MISMATCH",
+        yourVersion: clientVersion,
+        requiredVersion: room.requiredVersion,
+        message: `Versão incompatível. Sua versão é v${clientVersion} e a chamada requer v${room.requiredVersion}.`
+      });
+    }
+
+    if (room.peers.size === 0) {
+      room.requiredVersion = clientVersion;
+    }
+
     const existingPeers = Array.from(room.peers.values())
       .filter(p => p.peerId !== peerId)
       .map(p => ({ peerId: p.peerId, userInfo: p.userInfo }));
@@ -89,14 +118,14 @@ async function startServer() {
     if (!currentPeer) {
       currentPeer = {
         peerId,
-        userInfo: userInfo || { id: peerId, name: 'Aventureiro', role: 'jogador' },
+        userInfo: userInfo || { id: peerId, name: 'Aventureiro', role: 'jogador', appVersion: clientVersion },
         lastSeen: Date.now(),
         sseRes: null,
         queuedSignals: []
       };
       room.peers.set(peerId, currentPeer);
     } else {
-      currentPeer.userInfo = { ...currentPeer.userInfo, ...userInfo };
+      currentPeer.userInfo = { ...currentPeer.userInfo, ...userInfo, appVersion: clientVersion };
       currentPeer.lastSeen = Date.now();
     }
 
@@ -107,11 +136,13 @@ async function startServer() {
       userInfo: currentPeer.userInfo
     }, peerId);
 
-    console.log(`[Signaling Server] Peer ${peerId} (${currentPeer.userInfo.name}) entrou na sala "${room.id}". Total: ${room.peers.size}`);
+    console.log(`[Signaling Server] Peer ${peerId} (${currentPeer.userInfo.name} - v${clientVersion}) entrou na sala "${room.id}". Total: ${room.peers.size}`);
 
     res.json({
       success: true,
       roomId: room.id,
+      requiredVersion: room.requiredVersion,
+      diceBlockedForAll: !!room.diceBlockedForAll,
       peers: existingPeers
     });
   });
@@ -215,6 +246,11 @@ async function startServer() {
     const { from, data } = req.body;
 
     const room = getOrCreateRoom(roomId);
+    if (data && data.type === 'gm-toggle-dice-rolling') {
+      room.diceBlockedForAll = !!data.blocked;
+      console.log(`[Signaling Server] Mestre ${from} alterou bloqueio de dados na sala ${roomId} para: ${room.diceBlockedForAll}`);
+    }
+
     broadcastToRoom(room, {
       type: 'rpg-action',
       from,

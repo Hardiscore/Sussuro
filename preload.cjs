@@ -49,6 +49,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Eventos globais de mouse capturados no SO (uIOhook)
   startRecordingHotkey: () => ipcRenderer.send('start-recording-hotkey'),
   stopRecordingHotkey: () => ipcRenderer.send('stop-recording-hotkey'),
+  onGlobalHotkeyRecorded: (callback) => {
+    const handler = (_event, data) => callback(data);
+    ipcRenderer.on('global-hotkey-recorded', handler);
+    return () => ipcRenderer.removeListener('global-hotkey-recorded', handler);
+  },
   onGlobalMouseDown: (callback) => {
     const handler = (_event, data) => callback(data);
     ipcRenderer.on('global-mouse-down', handler);

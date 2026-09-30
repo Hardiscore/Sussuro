@@ -74,6 +74,19 @@ function removeUndefined(obj) {
 }
 
 /**
+ * Otimiza a descrição SDP para economizar banda e CPU:
+ * Ativa Opus DTX (Discontinuous Transmission) e prioriza voz em conexões Mesh.
+ */
+function optimizeSdp(desc) {
+  if (!desc || !desc.sdp) return desc;
+  let sdp = desc.sdp;
+  if (sdp.includes('a=fmtp:111') && !sdp.includes('usedtx=1')) {
+    sdp = sdp.replace(/a=fmtp:111 ((?:(?!usedtx=).)*)$/m, 'a=fmtp:111 $1;usedtx=1;stereo=0');
+  }
+  return { type: desc.type, sdp };
+}
+
+/**
  * Classe controladora de chamada WebRTC Mesh
  */
 export class TavernWebRTC {
@@ -89,6 +102,11 @@ export class TavernWebRTC {
       hasScreenAudio: false
     };
 
+    // Regulador adaptativo oculto de qualidade e desempenho
+    this.adaptiveProfile = 'balanced'; // 'high', 'balanced', 'low'
+    this.adaptiveMetrics = { rtt: 0, packetLoss: 0, profile: 'balanced', lastCheck: 0 };
+    this.adaptiveInterval = null;
+
     // Mídia local
     this.localStream = null;
     this.screenStream = null;
@@ -101,10 +119,12 @@ export class TavernWebRTC {
     // Conexões Mesh: peerId -> { connection: RTCPeerConnection, dataChannel, remoteStream, pendingCandidates: [], isPolite: boolean }
     this.peers = new Map();
 
-    // Detecção de voz ativa
+    // Detecção de voz ativa (Local e Remota)
     this.audioContext = null;
     this.analyser = null;
     this.audioMeterInterval = null;
+    this.remoteAnalysers = new Map(); // peerId -> { source, analyser, interval }
+    this.remoteAudioContext = null;
 
     // Mixagem de áudio para transmissão de tela (som do app/jogo + microfone)
     this.mixerCtx = null;
@@ -127,6 +147,10 @@ export class TavernWebRTC {
     this.noiseGateThreshold = options.noiseGateThreshold !== undefined ? options.noiseGateThreshold : 14;
     this.highpassFilter = null;
 
+    // Versão do Cliente e Compatibilidade Estrita
+    this.appVersion = options.appVersion || '1.0.6';
+    this.userInfo.appVersion = this.appVersion;
+
     // Callbacks do UI
     this.onLocalStreamReady = options.onLocalStreamReady || (() => {});
     this.onPeerStreamAdded = options.onPeerStreamAdded || (() => {});
@@ -141,6 +165,8 @@ export class TavernWebRTC {
     this.onDataMessage = options.onDataMessage || (() => {});
     this.onStatusChange = options.onStatusChange || (() => {});
     this.onNoAudioWarning = options.onNoAudioWarning || (() => {});
+    this.onVersionMismatch = options.onVersionMismatch || (() => {});
+    this.onDiceBlockedStateChange = options.onDiceBlockedStateChange || (() => {});
   }
 
   /**
@@ -365,16 +391,26 @@ export class TavernWebRTC {
         const isRnnoise = this.noiseSuppressionMode === 'rnnoise';
         const isNone = this.noiseSuppressionMode === 'none';
 
-        const threshold = this.noiseGateThreshold;
-        const activeThreshold = isGateMode ? threshold : (isRnnoise ? Math.max(5, threshold - 4) : 3);
-        const isSpeaking = level > activeThreshold;
+        // Limiar adaptativo ultra-sensível para vozes baixas e sussurros de RPG
+        let activeThreshold = 3;
+        if (isRnnoise) {
+          // No modo RNNoise, o filtro neural já silencia teclado e ventilador,
+          // permitindo alta sensibilidade para vozes baixas e sussurros
+          activeThreshold = 2.0;
+        } else if (isGateMode) {
+          activeThreshold = Math.max(2.5, Math.min(this.noiseGateThreshold, 7));
+        } else {
+          activeThreshold = 1.5;
+        }
+
+        const isSpeaking = level >= activeThreshold;
 
         if (isSpeaking) {
           lastSpokeTime = Date.now();
         }
 
-        // Hangover: mantém o portão aberto suavemente durante pausas normais na respiração e pontuação (280ms)
-        const hangoverMs = isGateMode ? 280 : 200;
+        // Hangover de 380ms: mantém o portão e a borda verde ativos durante pausas naturais sem piscar
+        const hangoverMs = 380;
         const gateIsOpen = isNone || (Date.now() - lastSpokeTime < hangoverMs);
 
         // Aplica corte de ruído real na saída do áudio transmitido aos outros jogadores
@@ -382,10 +418,10 @@ export class TavernWebRTC {
           if (isNone) {
             this.noiseGateGain.gain.setTargetAtTime(1.0, this.audioContext.currentTime, 0.01);
           } else if (gateIsOpen) {
-            // Ataque ultra-rápido (8ms) para não cortar a primeira letra/sílaba da fala
-            this.noiseGateGain.gain.setTargetAtTime(1.0, this.audioContext.currentTime, 0.008);
+            // Ataque ultra-rápido (6ms) para não cortar a primeira letra/sílaba da fala baixa
+            this.noiseGateGain.gain.setTargetAtTime(1.0, this.audioContext.currentTime, 0.006);
           } else {
-            // Liberação suave para silêncio completo quando parar de falar (elimina ventiladores e ruídos contínuos)
+            // Liberação suave para silêncio completo quando parar de falar
             const floorGain = isRnnoise ? 0.0 : 0.005;
             this.noiseGateGain.gain.setTargetAtTime(floorGain, this.audioContext.currentTime, 0.06);
           }
@@ -395,13 +431,13 @@ export class TavernWebRTC {
           this.processedAudioTrack.enabled = !this.userInfo.audioMuted;
         }
 
-        this.onNoiseGateState(isSpeaking, level, activeThreshold);
+        this.onNoiseGateState(gateIsOpen, level, activeThreshold);
 
-        if (isSpeaking !== wasSpeaking) {
-          wasSpeaking = isSpeaking;
-          this.userInfo.isSpeaking = isSpeaking;
+        if (gateIsOpen !== wasSpeaking) {
+          wasSpeaking = gateIsOpen;
+          this.userInfo.isSpeaking = gateIsOpen;
           this.broadcastMetadata();
-          this.onSpeakingState('local', isSpeaking, level);
+          this.onSpeakingState('local', gateIsOpen, level);
         }
       }, 50);
     } catch (err) {
@@ -961,6 +997,9 @@ export class TavernWebRTC {
       await this.startLocalMedia(null, null, false);
     }
 
+    // Inicia monitoramento adaptativo de rede e hardware em segundo plano
+    this.startAdaptiveNetworkMonitor();
+
     // 1. Tenta Firebase Realtime Database primeiro (ideal para salas na nuvem entre diferentes dispositivos e navegadores)
     try {
       const { db, isConfigured } = await initFirebase();
@@ -1029,8 +1068,25 @@ export class TavernWebRTC {
         })
       });
 
+      if (!joinResp.ok) {
+        const errData = await joinResp.json().catch(() => ({}));
+        if (errData.error === 'VERSION_MISMATCH') {
+          console.warn('[WebRTC] Erro de versão incompatível:', errData);
+          if (typeof this.onVersionMismatch === 'function') {
+            this.onVersionMismatch({
+              yourVersion: errData.yourVersion || this.appVersion,
+              requiredVersion: errData.requiredVersion || 'Outra Versão'
+            });
+          }
+          throw new Error(`VERSION_MISMATCH:${errData.yourVersion}:${errData.requiredVersion}`);
+        }
+      }
+
       if (joinResp.ok) {
         const joinData = await joinResp.json();
+        if (joinData.diceBlockedForAll && typeof this.onDiceBlockedStateChange === 'function') {
+          this.onDiceBlockedStateChange(true);
+        }
         if (Array.isArray(joinData.peers)) {
           for (const peer of joinData.peers) {
             if (peer && peer.peerId && peer.peerId !== this.myPeerId) {
@@ -1371,7 +1427,22 @@ export class TavernWebRTC {
       return;
     }
 
-    console.log(`[WebRTC] Novo peer descoberto: ${peerId} (${peerInfo.name})`);
+    // Verificação estrita de versão entre peers
+    const peerVersion = peerInfo && peerInfo.appVersion;
+    if (peerVersion && this.appVersion && peerVersion !== this.appVersion) {
+      console.warn(`[WebRTC] Incompatibilidade de versão detectada para ${peerId}: v${peerVersion} (sua versão: v${this.appVersion})`);
+      if (typeof this.onVersionMismatch === 'function') {
+        this.onVersionMismatch({
+          peerId,
+          peerName: peerInfo.name || 'Aventureiro',
+          peerVersion,
+          yourVersion: this.appVersion
+        });
+      }
+      return;
+    }
+
+    console.log(`[WebRTC] Novo peer descoberto: ${peerId} (${peerInfo.name} - v${peerVersion || this.appVersion})`);
     
     // Padrão Perfect Negotiation (RFC): o peer com ID "menor" atua como polite
     const isPolite = this.myPeerId < peerId;
@@ -1505,6 +1576,13 @@ export class TavernWebRTC {
       }
     };
 
+    pc.onconnectionstatechange = () => {
+      console.log(`[WebRTC] Estado de conexão com ${peerId}: ${pc.connectionState}`);
+      if (pc.connectionState === 'connected') {
+        this.applyQualityProfileToConnection(pc);
+      }
+    };
+
     // Recebimento de faixas de mídia remotas
     pc.ontrack = (event) => {
       console.log(`[WebRTC] Faixa remota recebida de ${peerId}:`, event.track.kind, event.streams);
@@ -1615,12 +1693,20 @@ export class TavernWebRTC {
             peerData.remoteStream.addTrack(track);
           }
 
+          // Inicia analisador em tempo real para detectar quando o participante fala (mesmo baixo)
+          this.setupRemoteAudioAnalyser(peerId, peerData.remoteStream);
+
           // Quando os primeiros pacotes RTP chegam e o track desmuta, re-sincroniza a reprodução do áudio
           track.onunmute = () => {
             console.log(`[WebRTC] Faixa de áudio de ${peerId} desmutada (RTP ativo). Sincronizando saída de áudio...`);
             if (peerData.remoteStream) {
+              this.setupRemoteAudioAnalyser(peerId, peerData.remoteStream);
               this.onPeerStreamAdded(peerId, peerData.peerInfo || peerInfo, peerData.remoteStream);
             }
+          };
+
+          track.onended = () => {
+            this.cleanupRemoteAudioAnalyser(peerId);
           };
 
           this.onPeerStreamAdded(peerId, peerData.peerInfo || peerInfo, peerData.remoteStream);
@@ -1656,6 +1742,13 @@ export class TavernWebRTC {
           }
           return;
         }
+
+        if (data && data.type === 'gm-toggle-dice-rolling') {
+          if (typeof this.onDiceBlockedStateChange === 'function') {
+            this.onDiceBlockedStateChange(!!data.blocked, data.gmName);
+          }
+        }
+
         this.onDataMessage(peerId, data);
       } catch (e) {
         this.onDataMessage(peerId, { text: event.data });
@@ -2000,6 +2093,7 @@ export class TavernWebRTC {
    * Encerra conexão com um peer específico
    */
   closePeer(peerId) {
+    this.cleanupRemoteAudioAnalyser(peerId);
     const peerObj = this.peers.get(peerId);
     if (peerObj) {
       if (peerObj.connection) {
@@ -2012,6 +2106,82 @@ export class TavernWebRTC {
   }
 
   /**
+   * Monitor de Voz Ativa de Participante Remoto (Borda Verde em tempo real)
+   * Analisa diretamente o sinal de áudio recebido nos fones/alto-falantes.
+   * Detecta com precisão quando o outro participante fala alto, fala baixo ou sussurra.
+   */
+  setupRemoteAudioAnalyser(peerId, stream) {
+    if (!stream || stream.getAudioTracks().length === 0) return;
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+
+      if (!this.remoteAudioContext) {
+        this.remoteAudioContext = new AudioCtx();
+      }
+      if (this.remoteAudioContext.state === 'suspended') {
+        this.remoteAudioContext.resume().catch(() => {});
+      }
+
+      this.cleanupRemoteAudioAnalyser(peerId);
+
+      const source = this.remoteAudioContext.createMediaStreamSource(stream);
+      const analyser = this.remoteAudioContext.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.2;
+      source.connect(analyser);
+
+      const timeData = new Uint8Array(analyser.fftSize);
+      let wasSpeaking = false;
+      let lastSpokeTime = 0;
+
+      const interval = setInterval(() => {
+        if (!this.peers.has(peerId)) {
+          this.cleanupRemoteAudioAnalyser(peerId);
+          return;
+        }
+
+        analyser.getByteTimeDomainData(timeData);
+        let sumSquares = 0;
+        for (let i = 0; i < timeData.length; i++) {
+          const val = (timeData[i] - 128) / 128;
+          sumSquares += val * val;
+        }
+        const rms = Math.sqrt(sumSquares / timeData.length);
+        const level = Math.round(rms * 100);
+
+        // Sensibilidade ultra-alta para vozes baixas e sussurros (rms > 0.015 ou level >= 2)
+        const isSpeaking = level >= 2;
+        if (isSpeaking) {
+          lastSpokeTime = Date.now();
+        }
+
+        // Hangover de 380ms para a borda verde dos outros jogadores não ficar piscando entre palavras
+        const speakingNow = isSpeaking || (Date.now() - lastSpokeTime < 380);
+
+        if (speakingNow !== wasSpeaking) {
+          wasSpeaking = speakingNow;
+          this.onSpeakingState(peerId, speakingNow, level);
+        }
+      }, 50);
+
+      this.remoteAnalysers.set(peerId, { source, analyser, interval });
+    } catch (err) {
+      console.warn(`[WebRTC] Não foi possível iniciar analisador de áudio para ${peerId}:`, err);
+    }
+  }
+
+  cleanupRemoteAudioAnalyser(peerId) {
+    const data = this.remoteAnalysers.get(peerId);
+    if (data) {
+      if (data.interval) clearInterval(data.interval);
+      try { data.source.disconnect(); } catch (e) {}
+      this.remoteAnalysers.delete(peerId);
+      this.onSpeakingState(peerId, false, 0);
+    }
+  }
+
+  /**
    * Sai da sala e encerra todas as conexões
    */
   leaveRoom() {
@@ -2020,6 +2190,15 @@ export class TavernWebRTC {
       try { fn(); } catch(e) {}
     });
     this.signalingCleanups = [];
+
+    // Limpa todos os analisadores de áudio remotos
+    for (const peerId of Array.from(this.remoteAnalysers.keys())) {
+      this.cleanupRemoteAudioAnalyser(peerId);
+    }
+    if (this.remoteAudioContext) {
+      try { this.remoteAudioContext.close(); } catch (e) {}
+      this.remoteAudioContext = null;
+    }
 
     // Notifica saída no broadcastChannel se ativo
     if (this.broadcastChannel) {
@@ -2045,6 +2224,8 @@ export class TavernWebRTC {
       this.audioMeterInterval = null;
     }
 
+    this.stopAdaptiveNetworkMonitor();
+
     if (this.audioContext) {
       try { this.audioContext.close(); } catch(e) {}
       this.audioContext = null;
@@ -2063,5 +2244,155 @@ export class TavernWebRTC {
 
     this.roomId = null;
     console.log('[WebRTC] Desconectado da sala com sucesso.');
+  }
+
+  /**
+   * Medidor de Velocidade e Desempenho Embutido e Oculto
+   * Mede RTT (latência em ms), perda de pacotes e frames em segundo plano a cada 3.5s.
+   * Regula a qualidade automaticamente:
+   * - PC fraco / Internet lenta: Reduz resolução (scaleResolutionDownBy: 2.0), 15fps, 180kbps (áudio 100% liso)
+   * - Conexão normal / balanceada: 480p, 24fps, 450kbps
+   * - PC forte / Internet rápida: 720p HD, 30fps, até 1200kbps (nitidez máxima)
+   */
+  startAdaptiveNetworkMonitor() {
+    this.stopAdaptiveNetworkMonitor();
+    this.adaptiveProfile = 'balanced';
+    this.adaptiveMetrics = { rtt: 0, packetLoss: 0, profile: 'balanced', lastCheck: Date.now() };
+
+    this.adaptiveInterval = setInterval(async () => {
+      if (!this.peers || this.peers.size === 0) return;
+
+      let totalRtt = 0;
+      let rttCount = 0;
+      let totalPacketsLost = 0;
+      let totalPacketsSent = 0;
+
+      for (const peer of this.peers.values()) {
+        const pc = peer.connection;
+        if (!pc || pc.connectionState !== 'connected') continue;
+
+        try {
+          const stats = await pc.getStats();
+          stats.forEach(report => {
+            if (report.type === 'candidate-pair' && (report.state === 'succeeded' || report.nominated)) {
+              if (typeof report.currentRoundTripTime === 'number') {
+                totalRtt += report.currentRoundTripTime * 1000;
+                rttCount++;
+              }
+            }
+            if (report.type === 'outbound-rtp' && report.kind === 'video') {
+              if (typeof report.packetsSent === 'number') {
+                totalPacketsSent += report.packetsSent;
+              }
+            }
+            if (report.type === 'remote-inbound-rtp' && report.kind === 'video') {
+              if (typeof report.packetsLost === 'number') {
+                totalPacketsLost += report.packetsLost;
+              }
+            }
+          });
+        } catch (err) {}
+      }
+
+      const avgRtt = rttCount > 0 ? (totalRtt / rttCount) : 0;
+      const packetLossRatio = (totalPacketsSent + totalPacketsLost) > 40
+        ? (totalPacketsLost / (totalPacketsSent + totalPacketsLost))
+        : 0;
+
+      let targetProfile = 'balanced';
+      if (avgRtt > 280 || packetLossRatio > 0.05) {
+        targetProfile = 'low';
+      } else if (avgRtt > 0 && avgRtt < 120 && packetLossRatio < 0.015) {
+        targetProfile = 'high';
+      }
+
+      this.adaptiveMetrics = {
+        rtt: Math.round(avgRtt),
+        packetLoss: +(packetLossRatio * 100).toFixed(1),
+        profile: targetProfile,
+        lastCheck: Date.now()
+      };
+
+      if (targetProfile !== this.adaptiveProfile) {
+        this.adaptiveProfile = targetProfile;
+        this.applyQualityProfileToAllSenders(targetProfile);
+      }
+    }, 3500);
+  }
+
+  stopAdaptiveNetworkMonitor() {
+    if (this.adaptiveInterval) {
+      clearInterval(this.adaptiveInterval);
+      this.adaptiveInterval = null;
+    }
+  }
+
+  applyQualityProfileToConnection(pc, profile = this.adaptiveProfile || 'balanced') {
+    if (!pc) return;
+    try {
+      const senders = pc.getSenders();
+      senders.forEach(sender => {
+        this.applySenderQualityParameters(sender, profile);
+      });
+    } catch (e) {}
+  }
+
+  applyQualityProfileToAllSenders(profile = this.adaptiveProfile || 'balanced') {
+    if (!this.peers) return;
+    for (const peer of this.peers.values()) {
+      if (peer.connection) {
+        this.applyQualityProfileToConnection(peer.connection, profile);
+      }
+    }
+  }
+
+  async applySenderQualityParameters(sender, profile = 'balanced') {
+    if (!sender || !sender.track) return;
+    try {
+      const params = sender.getParameters();
+      if (!params.encodings || params.encodings.length === 0) {
+        params.encodings = [{}];
+      }
+
+      if (sender.track.kind === 'video') {
+        const isScreen = this.screenStream && this.screenStream.getVideoTracks().some(t => t.id === sender.track.id);
+        if (isScreen) {
+          if (profile === 'low') {
+            params.encodings[0].maxBitrate = 450000;
+            params.encodings[0].maxFramerate = 15;
+            params.encodings[0].scaleResolutionDownBy = 1.33;
+          } else if (profile === 'high') {
+            params.encodings[0].maxBitrate = 1800000;
+            params.encodings[0].maxFramerate = 30;
+            params.encodings[0].scaleResolutionDownBy = 1.0;
+          } else {
+            params.encodings[0].maxBitrate = 850000;
+            params.encodings[0].maxFramerate = 24;
+            params.encodings[0].scaleResolutionDownBy = 1.0;
+          }
+        } else {
+          if (profile === 'low') {
+            params.encodings[0].maxBitrate = 180000;
+            params.encodings[0].maxFramerate = 15;
+            params.encodings[0].scaleResolutionDownBy = 2.0;
+          } else if (profile === 'high') {
+            params.encodings[0].maxBitrate = 1100000;
+            params.encodings[0].maxFramerate = 30;
+            params.encodings[0].scaleResolutionDownBy = 1.0;
+          } else {
+            params.encodings[0].maxBitrate = 450000;
+            params.encodings[0].maxFramerate = 24;
+            params.encodings[0].scaleResolutionDownBy = 1.0;
+          }
+        }
+        params.degradationPreference = 'balanced';
+      } else if (sender.track.kind === 'audio') {
+        params.encodings[0].priority = 'high';
+        params.encodings[0].networkPriority = 'high';
+        params.encodings[0].maxBitrate = 40000;
+      }
+
+      await sender.setParameters(params);
+    } catch (err) {}
   }
 }

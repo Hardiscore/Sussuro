@@ -27,10 +27,12 @@ app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion');
 // Garante que o áudio de outros jogadores toque sempre sem bloqueio de Autoplay
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
 
-// Aceleração de Hardware por GPU estável
+// Aceleração de Hardware por GPU estável e proteção para computadores fracos
 app.commandLine.appendSwitch('enable-gpu-rasterization');
 app.commandLine.appendSwitch('ignore-gpu-blocklist');
 app.commandLine.appendSwitch('enable-hardware-overlays');
+app.commandLine.appendSwitch('enable-accelerated-video-decode');
+app.commandLine.appendSwitch('webrtc-max-cpu-consumption-percentage', '80');
 
 // Suporte a eventos globais de mouse via uiohook-napi
 let uIOhook = null;
@@ -41,6 +43,16 @@ try {
   console.warn('[uIOhook] uiohook-napi não pôde ser carregado no ambiente atual:', err.message);
 }
 
+// Suporte a atalhos globais de teclado e mouse via RawInput (node-global-key-listener)
+let GlobalKeyboardListener = null;
+let globalKeyServer = null;
+try {
+  const gklModule = require('node-global-key-listener');
+  GlobalKeyboardListener = gklModule.GlobalKeyboardListener;
+} catch (err) {
+  console.warn('[GlobalKeyListener] node-global-key-listener não carregado:', err.message);
+}
+
 let mainWindow = null;
 
 function createWindow() {
@@ -49,8 +61,13 @@ function createWindow() {
     ? path.join(__dirname, 'preload.cjs')
     : path.join(__dirname, 'preload.js');
 
+  const iconPath = fs.existsSync(path.join(__dirname, 'icon.ico'))
+    ? path.join(__dirname, 'icon.ico')
+    : undefined;
+
   mainWindow = new BrowserWindow({
     title: 'Sussurro - RPG Voice & Video',
+    icon: iconPath,
     width: 1280,
     height: 800,
     minWidth: 860,
@@ -181,6 +198,16 @@ app.whenReady().then(() => {
       console.log('[uIOhook] Hook global de mouse e teclado inicializado com sucesso.');
     } catch (err) {
       console.warn('[uIOhook] Falha ao inicializar uIOhook:', err);
+    }
+  }
+
+  if (GlobalKeyboardListener) {
+    try {
+      globalKeyServer = new GlobalKeyboardListener();
+      globalKeyServer.addListener(handleRawGlobalInput);
+      console.log('[GlobalKeyListener] Ouvinte de teclas e mouse global ativo via RawInput.');
+    } catch (err) {
+      console.warn('[GlobalKeyListener] Falha ao iniciar GlobalKeyboardListener:', err);
     }
   }
 
@@ -454,8 +481,68 @@ function convertToAccelerator(key) {
 }
 
 let targetMouseButton = null;
+let activeRawHotkey = null;
 let currentHotkeyMode = 'toggle';
 let isRecordingHotkey = false;
+let lastRawToggleTime = 0;
+
+function normalizeKeyName(name) {
+  if (!name) return '';
+  const n = String(name).trim().toUpperCase();
+  if (n === 'MOUSE X1' || n === 'MOUSE 4' || n === 'XBUTTON1') return 'mouse4';
+  if (n === 'MOUSE X2' || n === 'MOUSE 5' || n === 'XBUTTON2') return 'mouse5';
+  if (n === 'MOUSE MIDDLE' || n === 'MOUSE 3' || n === 'MIDDLE') return 'mouse3';
+  if (n.startsWith('NUMPAD ')) return n.replace('NUMPAD ', 'num').toLowerCase();
+  if (n.startsWith('PAGE ')) return n.replace('PAGE ', 'page').toLowerCase();
+  return n.toLowerCase().replace(/\s+/g, '');
+}
+
+function handleRawGlobalInput(e) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+
+  const keyName = e.name;
+  if (!keyName) return;
+
+  const normalized = normalizeKeyName(keyName);
+
+  // Modo de gravação de atalho no modal de configurações
+  if (isRecordingHotkey && e.state === 'DOWN') {
+    if (keyName === 'MOUSE LEFT' || keyName === 'MOUSE RIGHT') return;
+
+    try {
+      mainWindow.webContents.send('global-hotkey-recorded', { key: normalized });
+      if (normalized.startsWith('mouse')) {
+        const num = parseInt(normalized.replace('mouse', ''), 10);
+        mainWindow.webContents.send('global-mouse-down', { button: num });
+      }
+    } catch (err) {}
+    return;
+  }
+
+  // Se o atalho configurado for acionado em qualquer janela ou jogo em segundo plano
+  if (activeRawHotkey && normalized === activeRawHotkey) {
+    try {
+      if (currentHotkeyMode === 'push_to_talk') {
+        if (e.state === 'DOWN') {
+          mainWindow.webContents.send('push-to-talk-start', { key: normalized });
+          mainWindow.webContents.send('global-hotkey-action', { type: 'ptt-start' });
+        } else if (e.state === 'UP') {
+          mainWindow.webContents.send('push-to-talk-stop', { key: normalized });
+          mainWindow.webContents.send('global-hotkey-action', { type: 'ptt-end' });
+        }
+      } else if (e.state === 'DOWN') {
+        const now = Date.now();
+        if (now - lastRawToggleTime > 250) {
+          lastRawToggleTime = now;
+          mainWindow.webContents.send('push-to-talk-toggle', { key: normalized });
+          mainWindow.webContents.send('global-hotkey-action', { type: 'toggle-mute' });
+        }
+      }
+    } catch (err) {
+      console.warn('[GlobalHotkey] Erro ao despachar evento RawInput:', err);
+    }
+  }
+}
 
 ipcMain.on('start-recording-hotkey', () => {
   isRecordingHotkey = true;
@@ -512,6 +599,7 @@ function handleGlobalMouseUp(e) {
 
 function unregisterActiveHotkey() {
   targetMouseButton = null;
+  activeRawHotkey = null;
   if (currentRegisteredHotkey) {
     try {
       globalShortcut.unregister(currentRegisteredHotkey);
@@ -533,6 +621,9 @@ ipcMain.on('register-global-hotkey', (event, { key, mode }) => {
   if (!key) return;
 
   currentHotkeyMode = mode || 'toggle';
+  activeRawHotkey = normalizeKeyName(key);
+  console.log(`[GlobalHotkey] Registrado via RawInput (node-global-key-listener): ${activeRawHotkey} (${currentHotkeyMode})`);
+
   const cleanKey = String(key).trim().toLowerCase();
 
   // Suporte nativo a botões extras de mouse (Mouse 4, Mouse 5, etc.) via uIOhook
@@ -601,6 +692,14 @@ ipcMain.on('unregister-global-hotkey', () => {
 app.on('will-quit', () => {
   unregisterActiveHotkey();
   globalShortcut.unregisterAll();
+  if (globalKeyServer) {
+    try {
+      globalKeyServer.kill();
+      console.log('[GlobalKeyListener] Servidor RawInput encerrado com sucesso.');
+    } catch (err) {
+      console.warn('[GlobalKeyListener] Erro ao encerrar servidor:', err);
+    }
+  }
   if (uIOhook) {
     try {
       uIOhook.stop();

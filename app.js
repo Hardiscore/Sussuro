@@ -166,13 +166,18 @@ const StorageService = {
 // Limite máximo de participantes suportados na malha P2P (mesh)
 const MAX_PARTICIPANTS = 15;
 
+// Versão Oficial do Sussurro RPG
+export const APP_VERSION = '1.0.6';
+
 const savedPrefs = StorageService.getAllPreferences();
 
 // Estado global da aplicação
 const state = {
+  appVersion: APP_VERSION,
   webrtc: null,
   userName: savedPrefs.userName,
   userRole: savedPrefs.userRole,
+  isMestreRoleUnlocked: false,
   userClassIcon: savedPrefs.classIcon,
   selectedAudioDeviceId: savedPrefs.audioDeviceId,
   selectedVideoDeviceId: savedPrefs.videoDeviceId,
@@ -201,7 +206,10 @@ const state = {
   // Fontes de tela/janela para transmissão
   screenShareSources: { screens: [], windows: [] },
   selectedScreenSource: null,
-  selectedScreenTab: 'screen'
+  selectedScreenTab: 'screen',
+  // Rolagem de Dados de RPG & Controles de Mestre
+  gmDiceSoundMuted: false,
+  diceBlockedForAll: false
 };
 
 // ============================================================================
@@ -580,9 +588,30 @@ function setupLobbyInputs() {
     updateAvatarVisuals();
   });
 
-  // Carrega papel salvo
-  if (state.userRole === 'mestre') {
+  // Atalho exclusivo para Mestres: Ctrl + Shift + M para desbloquear e revelar a opção
+  window.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'M' || e.key === 'm' || e.code === 'KeyM')) {
+      e.preventDefault();
+      state.isMestreRoleUnlocked = !state.isMestreRoleUnlocked;
+      if (state.isMestreRoleUnlocked) {
+        roleMestre.classList.remove('hidden');
+        roleMestre.click();
+        showLayoutNotification('👑 Modo Mestre (GM) desbloqueado com sucesso!');
+      } else {
+        roleMestre.classList.add('hidden');
+        roleJogador.click();
+        showLayoutNotification('Papel de Mestre ocultado.');
+      }
+    }
+  });
+
+  // Por padrão, a opção de Mestre fica oculta. Só seleciona se desbloqueado
+  if (state.userRole === 'mestre' && state.isMestreRoleUnlocked) {
+    roleMestre.classList.remove('hidden');
     roleMestre.click();
+  } else {
+    state.userRole = 'jogador';
+    roleJogador.click();
   }
 
   btnJoin.addEventListener('click', () => {
@@ -1105,6 +1134,19 @@ async function startCall(roomId) {
       updatePeerMetadata(peerId, peerInfo);
     },
 
+    appVersion: APP_VERSION,
+
+    onVersionMismatch: (data) => {
+      showVersionMismatchModal(data.yourVersion || APP_VERSION, data.requiredVersion || data.peerVersion || 'Outra Versão');
+      leaveCall();
+    },
+
+    onDiceBlockedStateChange: (blocked, gmName) => {
+      state.diceBlockedForAll = blocked;
+      updateDiceButtonsBlockedState();
+      displayDiceToast(blocked ? `🎲 ${escapeHtml(gmName || 'O Mestre')} desabilitou a rolagem de dados para todos.` : `🎲 ${escapeHtml(gmName || 'O Mestre')} liberou a rolagem de dados!`);
+    },
+
     onSpeakingState: (targetId, isSpeaking, volume) => {
       if (targetId === 'local') {
         const localTile = document.getElementById('tile-local');
@@ -1135,6 +1177,11 @@ async function startCall(roomId) {
     onDataMessage: (peerId, data) => {
       if (data.type === 'rpg-dice-roll') {
         showDiceRollNotification(data);
+      }
+      if (data.type === 'gm-toggle-dice-rolling') {
+        state.diceBlockedForAll = !!data.blocked;
+        updateDiceButtonsBlockedState();
+        displayDiceToast(data.blocked ? `🎲 ${escapeHtml(data.gmName || 'O Mestre')} desabilitou a rolagem de dados para todos.` : `🎲 ${escapeHtml(data.gmName || 'O Mestre')} liberou a rolagem de dados!`);
       }
       if (data.type === 'gm-mute-player') {
         if (data.targetId === 'all' || (state.webrtc && data.targetId === state.webrtc.myPeerId)) {
@@ -1180,7 +1227,8 @@ async function startCall(roomId) {
       name: state.userName,
       role: state.userRole,
       audioMuted: state.isAudioMuted,
-      videoOff: state.isVideoOff
+      videoOff: state.isVideoOff,
+      appVersion: APP_VERSION
     });
 
     // Se entrou como Mestre (GM), exibe o botão de silenciar todos na barra superior
@@ -1195,7 +1243,12 @@ async function startCall(roomId) {
     }
   } catch (err) {
     console.error('[WebRTC] Erro ao entrar na sala:', err);
-    alert('Erro ao conectar na sala: ' + err.message);
+    if (err.message && err.message.startsWith('VERSION_MISMATCH')) {
+      const parts = err.message.split(':');
+      showVersionMismatchModal(parts[1] || APP_VERSION, parts[2] || 'Outra Versão');
+    } else {
+      alert('Erro ao conectar na sala: ' + err.message);
+    }
     leaveCall();
   }
 }
@@ -2509,6 +2562,15 @@ function setupKeyboardShortcuts() {
       });
     }
 
+    // Captura teclas e botões gravados no SO via RawInput (node-global-key-listener)
+    if (typeof window.electronAPI.onGlobalHotkeyRecorded === 'function') {
+      window.electronAPI.onGlobalHotkeyRecorded((data) => {
+        if (state.isRecordingHotkey && data && data.key) {
+          finishHotkeyRecording(data.key);
+        }
+      });
+    }
+
     // Captura cliques globais de mouse para permitir gravar Mouse 4, Mouse 5, etc. direto do hardware
     if (typeof window.electronAPI.onGlobalMouseDown === 'function') {
       window.electronAPI.onGlobalMouseDown((data) => {
@@ -2548,6 +2610,7 @@ function setupKeyboardShortcuts() {
 
   window.addEventListener('mousedown', handleMouseRecording, true);
   window.addEventListener('auxclick', handleMouseRecording, true);
+  window.addEventListener('pointerdown', handleMouseRecording, true);
 
   // Manipulação de cliques de mouse locais na janela quando o atalho ativo for um botão do mouse
   window.addEventListener('mousedown', (e) => {
@@ -2836,10 +2899,61 @@ function setupDiceRoller() {
   const btnClose = document.getElementById('btn-close-dice');
   const btnDismissBottom = document.getElementById('btn-dismiss-dice-bottom');
   const resultDisplay = document.getElementById('dice-result-display');
+  const btnGmMuteSound = document.getElementById('btn-gm-mute-dice-sound');
+  const btnGmBlockAll = document.getElementById('btn-gm-block-dice-all');
+
+  function refreshGmDiceControls() {
+    const isMestre = state.userRole === 'mestre';
+    if (btnGmMuteSound) {
+      if (isMestre) {
+        btnGmMuteSound.classList.remove('hidden');
+        btnGmMuteSound.classList.toggle('active', state.gmDiceSoundMuted);
+        btnGmMuteSound.setAttribute('title', state.gmDiceSoundMuted ? 'Som dos dados silenciado para você (Clique para reativar som)' : 'Desabilitar som dos dados para mim (Mestre)');
+      } else {
+        btnGmMuteSound.classList.add('hidden');
+      }
+    }
+    if (btnGmBlockAll) {
+      if (isMestre) {
+        btnGmBlockAll.classList.remove('hidden');
+        btnGmBlockAll.classList.toggle('active', state.diceBlockedForAll);
+        btnGmBlockAll.setAttribute('title', state.diceBlockedForAll ? 'Rolagem de dados bloqueada para todos (Clique para liberar)' : 'Desabilitar rolagem de dados para todos');
+      } else {
+        btnGmBlockAll.classList.add('hidden');
+      }
+    }
+    updateDiceButtonsBlockedState();
+  }
+
+  if (btnGmMuteSound) {
+    btnGmMuteSound.onclick = (e) => {
+      e.stopPropagation();
+      state.gmDiceSoundMuted = !state.gmDiceSoundMuted;
+      refreshGmDiceControls();
+      showLayoutNotification(state.gmDiceSoundMuted ? '🔇 Som dos dados desativado para você (Mestre).' : '🔊 Som dos dados ativado.');
+    };
+  }
+
+  if (btnGmBlockAll) {
+    btnGmBlockAll.onclick = (e) => {
+      e.stopPropagation();
+      state.diceBlockedForAll = !state.diceBlockedForAll;
+      refreshGmDiceControls();
+      if (state.webrtc) {
+        state.webrtc.broadcastRpgAction({
+          type: 'gm-toggle-dice-rolling',
+          blocked: state.diceBlockedForAll,
+          gmName: state.userName
+        });
+      }
+      showLayoutNotification(state.diceBlockedForAll ? '🚫 Rolagem de dados desabilitada para todos os jogadores.' : '🎲 Rolagem de dados liberada para todos.');
+    };
+  }
 
   function openDicePanel() {
     dicePanel.classList.remove('hidden');
     btnToggle.classList.add('active-tool');
+    refreshGmDiceControls();
   }
 
   function closeDicePanel() {
@@ -2892,11 +3006,19 @@ function setupDiceRoller() {
   });
 
   function rollDie(sides) {
+    if (state.diceBlockedForAll && state.userRole !== 'mestre') {
+      showLayoutNotification('🚫 O Mestre desabilitou a rolagem de dados para todos os jogadores.');
+      displayDiceToast('🚫 A rolagem de dados foi bloqueada pelo Mestre.');
+      return;
+    }
+
     const roll = Math.floor(Math.random() * sides) + 1;
     const isCritical = (sides === 20 && roll === 20);
     const isCriticalFumble = (sides === 20 && roll === 1);
 
-    playDiceSound(isCritical);
+    if (!(state.userRole === 'mestre' && state.gmDiceSoundMuted)) {
+      playDiceSound(isCritical);
+    }
 
     let criticalLabel = '';
     if (isCritical) criticalLabel = ' 🌟 ACERTO CRÍTICO!';
@@ -2921,7 +3043,9 @@ function setupDiceRoller() {
 }
 
 function showDiceRollNotification(data) {
-  playDiceSound(data.isCritical);
+  if (!(state.userRole === 'mestre' && state.gmDiceSoundMuted)) {
+    playDiceSound(data.isCritical);
+  }
 
   let critText = '';
   if (data.isCritical) critText = ' 🌟 CRÍTICO!';
@@ -2934,6 +3058,43 @@ function showDiceRollNotification(data) {
 
   // Notificação flutuante leve e não-intrusiva (não abre o modal na tela)
   displayDiceToast(`<strong>${escapeHtml(data.senderName)}</strong> rolou D${data.dieSides}: <span style="font-weight: 800; color: var(--accent-gold); font-size: 15px;">${data.result}</span>${critText}`);
+}
+
+function updateDiceButtonsBlockedState() {
+  const dicePanel = document.getElementById('dice-roller-modal');
+  if (!dicePanel) return;
+  const isBlocked = state.diceBlockedForAll && state.userRole !== 'mestre';
+  dicePanel.querySelectorAll('.dice-btn').forEach(btn => {
+    btn.disabled = isBlocked;
+    if (isBlocked) {
+      btn.classList.add('blocked');
+      btn.setAttribute('title', 'Rolagem temporariamente bloqueada pelo Mestre');
+    } else {
+      btn.classList.remove('blocked');
+      btn.removeAttribute('title');
+    }
+  });
+  const btnQuick = document.getElementById('btn-quick-dice');
+  if (btnQuick) {
+    btnQuick.disabled = isBlocked;
+  }
+}
+
+function showVersionMismatchModal(yourVer, roomVer) {
+  const modal = document.getElementById('version-mismatch-modal');
+  if (!modal) return;
+  const yourEl = document.getElementById('mismatch-your-version');
+  const roomEl = document.getElementById('mismatch-room-version');
+  if (yourEl) yourEl.textContent = `v${yourVer}`;
+  if (roomEl) roomEl.textContent = `v${roomVer}`;
+  modal.classList.remove('hidden');
+
+  const btnClose = document.getElementById('btn-close-version-mismatch');
+  if (btnClose) {
+    btnClose.onclick = () => {
+      modal.classList.add('hidden');
+    };
+  }
 }
 
 function setNoiseSuppressionMode(mode) {
@@ -3205,7 +3366,7 @@ function setupVersionSettingsTab(modal) {
   const progressPct = document.getElementById('version-download-pct');
   const progressBar = document.getElementById('version-download-bar');
 
-  let currentAppVersion = '1.0.5';
+  let currentAppVersion = APP_VERSION;
 
   // Obter versão instalada do Electron
   if (window.electronAPI && typeof window.electronAPI.getAppVersion === 'function') {
