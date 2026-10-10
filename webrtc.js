@@ -148,7 +148,7 @@ export class TavernWebRTC {
     this.highpassFilter = null;
 
     // Versão do Cliente e Compatibilidade Estrita
-    this.appVersion = options.appVersion || '1.0.6';
+    this.appVersion = options.appVersion || '1.1.0';
     this.userInfo.appVersion = this.appVersion;
 
     // Callbacks do UI
@@ -214,13 +214,20 @@ export class TavernWebRTC {
           },
           video: false
         });
-      } catch (audioFallbackErr) {
-        console.warn('[WebRTC] Microfone não detectado ou permissão negada:', audioFallbackErr);
-        this.hasAudioDevice = false;
-        this.userInfo.audioMuted = true;
-        this.userInfo.noAudioDevice = true;
-        if (typeof this.onNoAudioWarning === 'function') {
-          this.onNoAudioWarning('Aviso: Nenhum microfone detectado. Você entrou na conversa em modo ouvinte.');
+      } catch (audioSimpleErr) {
+        try {
+          audioStream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+            video: false
+          });
+        } catch (audioFallbackErr) {
+          console.warn('[WebRTC] Microfone não detectado ou permissão negada:', audioFallbackErr);
+          this.hasAudioDevice = false;
+          this.userInfo.audioMuted = true;
+          this.userInfo.noAudioDevice = true;
+          if (typeof this.onNoAudioWarning === 'function') {
+            this.onNoAudioWarning('Aviso: Microfone não liberado ou não detectado. Toque no ícone de microfone para solicitar permissão.');
+          }
         }
       }
     }
@@ -249,23 +256,28 @@ export class TavernWebRTC {
 
     // Câmera: Ao entrar na chamada, NÃO ligar a câmera automaticamente (fica desligada por padrão)
     if (requestVideo) {
+      let camStream = null;
       try {
-        const videoConstraints = {
-          ...(this.selectedVideoDeviceId ? { deviceId: { exact: this.selectedVideoDeviceId } } : {}),
-          width: { ideal: 640, max: 1280 },
-          height: { ideal: 480, max: 720 },
-          frameRate: { ideal: 24, max: 30 }
-        };
+        const videoConstraints = this.selectedVideoDeviceId
+          ? { deviceId: { exact: this.selectedVideoDeviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
+          : { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } };
 
-        const camStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+        camStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+      } catch (camErr) {
+        try {
+          camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        } catch (camFallbackErr) {
+          console.warn('[WebRTC] Câmera não encontrada ou acesso recusado:', camFallbackErr);
+          this.userInfo.videoOff = true;
+        }
+      }
+
+      if (camStream) {
         const camTrack = camStream.getVideoTracks()[0];
         if (camTrack) {
           this.localStream.addTrack(camTrack);
           camTrack.enabled = !this.userInfo.videoOff;
         }
-      } catch (camErr) {
-        console.warn('[WebRTC] Câmera não encontrada ou acesso recusado:', camErr);
-        this.userInfo.videoOff = true;
       }
     } else {
       this.userInfo.videoOff = true;
@@ -612,15 +624,27 @@ export class TavernWebRTC {
 
     if (wantVideoOn) {
       if (!videoTrack || videoTrack.readyState === 'ended') {
+        let camStream = null;
         try {
-          const videoConstraints = {
-            ...(this.selectedVideoDeviceId ? { deviceId: { exact: this.selectedVideoDeviceId } } : {}),
-            width: { ideal: 640, max: 1280 },
-            height: { ideal: 480, max: 720 },
-            frameRate: { ideal: 24, max: 30 }
-          };
+          const videoConstraints = this.selectedVideoDeviceId
+            ? { deviceId: { exact: this.selectedVideoDeviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
+            : { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } };
 
-          const camStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints });
+          camStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+        } catch (err) {
+          console.warn('[WebRTC] Tentando fallback simples de câmera (video: true):', err);
+          try {
+            camStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          } catch (fallbackErr) {
+            console.warn('[WebRTC] Não foi possível ativar câmera sob demanda:', fallbackErr);
+            this.userInfo.videoOff = true;
+            this.broadcastMetadata();
+            this.onLocalStreamReady(this.localStream);
+            return true;
+          }
+        }
+
+        if (camStream) {
           videoTrack = camStream.getVideoTracks()[0];
           if (videoTrack) {
             if (!this.localStream) this.localStream = new MediaStream();
@@ -631,12 +655,6 @@ export class TavernWebRTC {
             }
             this.localStream.addTrack(videoTrack);
           }
-        } catch (err) {
-          console.warn('[WebRTC] Não foi possível ativar câmera sob demanda:', err);
-          this.userInfo.videoOff = true;
-          this.broadcastMetadata();
-          this.onLocalStreamReady(this.localStream);
-          return true;
         }
       }
 
@@ -1201,6 +1219,7 @@ export class TavernWebRTC {
       role: this.userInfo.role,
       audioMuted: this.userInfo.audioMuted,
       videoOff: this.userInfo.videoOff,
+      appVersion: this.appVersion,
       joinedAt: Date.now()
     });
 

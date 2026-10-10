@@ -167,7 +167,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.0.6';
+export const APP_VERSION = '1.1.0';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -463,24 +463,28 @@ async function initApp() {
   }
 
   try {
+    setupPwaAndOfflineSupport();
     setupLobbyInputs();
     setupSettingsModal();
     setupScreenShareModal();
     setupDiceRoller();
     setupCallControls();
+    setupMobilePushToTalk();
     setupLayoutSelector();
     setupKeyboardShortcuts();
     applyGridLayout(state.currentLayout);
+    const lobbyEl = document.getElementById('lobby-screen');
+    if (lobbyEl) lobbyEl.scrollTop = 0;
   } catch (e) {
     console.error('[Init] Erro na configuração dos controles da UI:', e);
   }
 
-  // Inicializa enumeração de dispositivos e prévia local no Lobby
+  // Inicializa prévia local no Lobby (solicita permissão de Mic/Câmera) e depois enumera os dispositivos com nomes reais
   try {
+    await initLobbyPreview(false);
     await enumerateDevices();
-    await initLobbyPreview();
   } catch (e) {
-    console.warn('[Init] Erro ao enumerar dispositivos locais:', e);
+    console.warn('[Init] Erro ao inicializar mídia local:', e);
   }
 
   if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
@@ -496,10 +500,12 @@ async function initApp() {
 // ============================================================================
 function setupElectronTitlebar() {
   const isElectron = !!(window.electronAPI && window.electronAPI.isElectron);
+  const titlebar = document.getElementById('custom-titlebar');
   const statusBadge = document.getElementById('titlebar-status');
   const windowControls = document.getElementById('window-controls');
 
   if (isElectron) {
+    if (titlebar) titlebar.classList.remove('hidden');
     if (statusBadge) statusBadge.textContent = 'Electron Desktop';
     const btnMin = document.getElementById('btn-window-minimize');
     const btnMax = document.getElementById('btn-window-maximize');
@@ -541,8 +547,8 @@ function setupElectronTitlebar() {
       });
     }
   } else {
-    if (statusBadge) statusBadge.textContent = 'WebRTC Mesh (Navegador)';
-    // Em modo navegador normal, esconde os botões de janela do sistema
+    // No Navegador Web, Android ou PWA instalado, oculta completamente a barra de janela do topo
+    if (titlebar) titlebar.classList.add('hidden');
     if (windowControls) windowControls.style.display = 'none';
   }
 }
@@ -588,22 +594,44 @@ function setupLobbyInputs() {
     updateAvatarVisuals();
   });
 
-  // Atalho exclusivo para Mestres: Ctrl + Shift + M para desbloquear e revelar a opção
+  // Atalho exclusivo para Mestres: Ctrl + Shift + M no PC ou 5 toques rápidos no título no celular
+  const toggleMestreUnlock = () => {
+    state.isMestreRoleUnlocked = !state.isMestreRoleUnlocked;
+    if (state.isMestreRoleUnlocked) {
+      roleMestre.classList.remove('hidden');
+      roleMestre.click();
+      showLayoutNotification('👑 Modo Mestre (GM) desbloqueado com sucesso!');
+    } else {
+      roleMestre.classList.add('hidden');
+      roleJogador.click();
+      showLayoutNotification('Papel de Mestre ocultado.');
+    }
+  };
+
   window.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'M' || e.key === 'm' || e.code === 'KeyM')) {
       e.preventDefault();
-      state.isMestreRoleUnlocked = !state.isMestreRoleUnlocked;
-      if (state.isMestreRoleUnlocked) {
-        roleMestre.classList.remove('hidden');
-        roleMestre.click();
-        showLayoutNotification('👑 Modo Mestre (GM) desbloqueado com sucesso!');
-      } else {
-        roleMestre.classList.add('hidden');
-        roleJogador.click();
-        showLayoutNotification('Papel de Mestre ocultado.');
-      }
+      toggleMestreUnlock();
     }
   });
+
+  const lobbyHeading = document.getElementById('lobby-title-heading');
+  if (lobbyHeading) {
+    let tapCount = 0;
+    let tapTimer = null;
+    lobbyHeading.addEventListener('click', () => {
+      tapCount++;
+      if (tapTimer) clearTimeout(tapTimer);
+      if (tapCount >= 5) {
+        tapCount = 0;
+        toggleMestreUnlock();
+      } else {
+        tapTimer = setTimeout(() => {
+          tapCount = 0;
+        }, 1200);
+      }
+    });
+  }
 
   // Por padrão, a opção de Mestre fica oculta. Só seleciona se desbloqueado
   if (state.userRole === 'mestre' && state.isMestreRoleUnlocked) {
@@ -905,56 +933,165 @@ let lobbyStream = null;
 let lobbyAudioAnalyser = null;
 let lobbyAudioInterval = null;
 
-async function initLobbyPreview() {
+async function initLobbyPreview(fromUserGesture = false) {
   const videoEl = document.getElementById('lobby-preview-video');
+  const avatarEl = document.getElementById('lobby-preview-avatar');
   const fillEl = document.getElementById('lobby-audio-meter-fill');
   const previewBox = document.getElementById('lobby-preview-box');
+  const permOverlay = document.getElementById('lobby-permission-prompt');
+  const permTitle = document.getElementById('lobby-permission-title');
+  const permDesc = document.getElementById('lobby-permission-desc');
+  const btnRequestPerm = document.getElementById('btn-request-permissions');
+  const badgeAudioText = document.getElementById('badge-lobby-audio-text');
+  const badgeVideoText = document.getElementById('badge-lobby-video-text');
 
+  if (btnRequestPerm && !btnRequestPerm.dataset.bound) {
+    btnRequestPerm.dataset.bound = 'true';
+    btnRequestPerm.onclick = async (e) => {
+      e.stopPropagation();
+      await initLobbyPreview(true);
+      await enumerateDevices();
+    };
+  }
+
+  if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+    if (permOverlay) {
+      permOverlay.classList.remove('hidden');
+      if (permTitle) permTitle.textContent = 'Mídia Indisponível';
+      if (permDesc) permDesc.textContent = 'Para usar microfone e câmera no celular, acesse via conexão segura (HTTPS).';
+    }
+    return;
+  }
+
+  // Encerra stream anterior da prévia se houver
+  if (lobbyStream) {
+    lobbyStream.getTracks().forEach(t => t.stop());
+    lobbyStream = null;
+  }
+
+  let acquiredAudio = false;
+  let acquiredVideo = false;
+  let combinedStream = new MediaStream();
+
+  // 1. Tenta pedir Áudio + Vídeo juntos primeiro
   try {
-    const audioConstraints = state.selectedAudioDeviceId 
-      ? { deviceId: { exact: state.selectedAudioDeviceId } }
-      : true;
+    const audioConstraints = state.selectedAudioDeviceId
+      ? { deviceId: { ideal: state.selectedAudioDeviceId }, echoCancellation: true, noiseSuppression: true }
+      : { echoCancellation: true, noiseSuppression: true };
 
-    const videoConstraints = state.selectedVideoDeviceId 
-      ? { deviceId: { exact: state.selectedVideoDeviceId } }
-      : true;
+    const videoConstraints = state.selectedVideoDeviceId
+      ? { deviceId: { ideal: state.selectedVideoDeviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
+      : { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } };
 
-    lobbyStream = await navigator.mediaDevices.getUserMedia({
+    const bothStream = await navigator.mediaDevices.getUserMedia({
       audio: audioConstraints,
       video: videoConstraints
     });
 
-    videoEl.srcObject = lobbyStream;
-
-    // Medidor de áudio do Lobby
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (AudioCtx) {
-      const audioCtx = new AudioCtx();
-      const source = audioCtx.createMediaStreamSource(lobbyStream);
-      lobbyAudioAnalyser = audioCtx.createAnalyser();
-      lobbyAudioAnalyser.fftSize = 256;
-      source.connect(lobbyAudioAnalyser);
-
-      const buffer = new Uint8Array(lobbyAudioAnalyser.frequencyBinCount);
-      if (lobbyAudioInterval) clearInterval(lobbyAudioInterval);
-
-      lobbyAudioInterval = setInterval(() => {
-        lobbyAudioAnalyser.getByteFrequencyData(buffer);
-        let sum = 0;
-        for (let i = 0; i < buffer.length; i++) sum += buffer[i];
-        const avg = sum / buffer.length;
-        const pct = Math.min(100, Math.round((avg / 60) * 100));
-        fillEl.style.width = pct + '%';
-
-        if (avg > 15) {
-          previewBox.classList.add('speaking');
-        } else {
-          previewBox.classList.remove('speaking');
-        }
-      }, 80);
+    bothStream.getAudioTracks().forEach(t => {
+      combinedStream.addTrack(t);
+      acquiredAudio = true;
+    });
+    bothStream.getVideoTracks().forEach(t => {
+      combinedStream.addTrack(t);
+      acquiredVideo = true;
+    });
+  } catch (bothErr) {
+    // 2. Fallback separado: tenta apenas Áudio (Microfone)
+    try {
+      const audioOnly = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      audioOnly.getAudioTracks().forEach(t => {
+        combinedStream.addTrack(t);
+        acquiredAudio = true;
+      });
+    } catch (audioErr) {
+      console.warn('[Lobby] Microfone ainda não liberado:', audioErr);
     }
-  } catch (err) {
-    console.warn('[Lobby] Permissão de câmera/microfone ainda não concedida:', err);
+
+    // 3. Fallback separado: tenta apenas Vídeo (Câmera)
+    try {
+      const videoOnly = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      videoOnly.getVideoTracks().forEach(t => {
+        combinedStream.addTrack(t);
+        acquiredVideo = true;
+      });
+    } catch (videoErr) {
+      console.warn('[Lobby] Câmera ainda não liberada:', videoErr);
+    }
+  }
+
+  if (!acquiredAudio && !acquiredVideo) {
+    if (permOverlay) {
+      permOverlay.classList.remove('hidden');
+      if (fromUserGesture) {
+        if (permTitle) permTitle.textContent = 'Permissão Bloqueada ou Negada';
+        if (permDesc) {
+          permDesc.innerHTML = 'O navegador bloqueou o acesso. Toque no <strong>cadeado 🔒 / ícone ao lado da URL</strong> ou nas <strong>Configurações do App no Android</strong> e marque <strong>Permitir Microfone e Câmera</strong>.';
+        }
+        showLayoutNotification('⚠️ Permita o acesso ao Microfone e Câmera nas configurações do navegador/app.');
+      }
+    }
+    if (badgeAudioText) badgeAudioText.textContent = 'Mic Sem Permissão';
+    if (badgeVideoText) badgeVideoText.textContent = 'Câmera Sem Permissão';
+    return;
+  }
+
+  // Se conseguiu pelo menos um dos dois, oculta o overlay de bloqueio
+  if (permOverlay) permOverlay.classList.add('hidden');
+  lobbyStream = combinedStream;
+
+  if (badgeAudioText) badgeAudioText.textContent = acquiredAudio ? 'Mic Ativo' : 'Sem Mic';
+  if (badgeVideoText) badgeVideoText.textContent = acquiredVideo ? 'Vídeo Ativo' : 'Sem Câmera';
+
+  if (videoEl) {
+    if (acquiredVideo) {
+      videoEl.style.display = 'block';
+      if (avatarEl) avatarEl.style.display = 'none';
+      videoEl.srcObject = lobbyStream;
+      videoEl.play().catch(() => {});
+    } else {
+      videoEl.style.display = 'none';
+      if (avatarEl) avatarEl.style.display = 'flex';
+    }
+  }
+
+  // Medidor de áudio do Lobby
+  if (acquiredAudio) {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (AudioCtx) {
+        const audioCtx = new AudioCtx();
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume().catch(() => {});
+        }
+        const source = audioCtx.createMediaStreamSource(lobbyStream);
+        lobbyAudioAnalyser = audioCtx.createAnalyser();
+        lobbyAudioAnalyser.fftSize = 256;
+        source.connect(lobbyAudioAnalyser);
+
+        const buffer = new Uint8Array(lobbyAudioAnalyser.frequencyBinCount);
+        if (lobbyAudioInterval) clearInterval(lobbyAudioInterval);
+
+        lobbyAudioInterval = setInterval(() => {
+          lobbyAudioAnalyser.getByteFrequencyData(buffer);
+          let sum = 0;
+          for (let i = 0; i < buffer.length; i++) sum += buffer[i];
+          const avg = sum / buffer.length;
+          const pct = Math.min(100, Math.round((avg / 60) * 100));
+          if (fillEl) fillEl.style.width = pct + '%';
+
+          if (previewBox) {
+            if (avg > 15) {
+              previewBox.classList.add('speaking');
+            } else {
+              previewBox.classList.remove('speaking');
+            }
+          }
+        }, 80);
+      }
+    } catch (audioCtxErr) {
+      console.warn('[Lobby] Aviso no medidor de áudio:', audioCtxErr);
+    }
   }
 }
 
@@ -1231,6 +1368,11 @@ async function startCall(roomId) {
       appVersion: APP_VERSION
     });
 
+    // Ativa proteção de primeiro plano (Wake Lock) e segundo plano (Media Session + Audio Keep-Alive)
+    acquireWakeLock();
+    startBackgroundAudioKeepAlive(roomId);
+    updateMobilePttVisibility();
+
     // Se entrou como Mestre (GM), exibe o botão de silenciar todos na barra superior
     const btnGmMuteAll = document.getElementById('btn-gm-mute-all');
     if (btnGmMuteAll) {
@@ -1260,6 +1402,10 @@ function leaveCall() {
   }
   state.isInCall = false;
 
+  releaseWakeLock();
+  stopBackgroundAudioKeepAlive();
+  updateMobilePttVisibility();
+
   const btnGmMuteAll = document.getElementById('btn-gm-mute-all');
   if (btnGmMuteAll) {
     btnGmMuteAll.classList.add('hidden');
@@ -1288,7 +1434,11 @@ function leaveCall() {
   // Volta para a tela de Lobby
   document.getElementById('no-audio-warning-banner')?.classList.add('hidden');
   document.getElementById('call-screen').classList.add('hidden');
-  document.getElementById('lobby-screen').classList.remove('hidden');
+  const lobbyScreenEl = document.getElementById('lobby-screen');
+  if (lobbyScreenEl) {
+    lobbyScreenEl.classList.remove('hidden');
+    lobbyScreenEl.scrollTop = 0;
+  }
   fetchActiveRoomsFromFirebase();
   initLobbyPreview();
 }
@@ -2414,7 +2564,26 @@ function setAudioMute(muted, isPtt = false) {
   }
 }
 
-function toggleMute() {
+async function toggleMute() {
+  // Se o usuário estava sem dispositivo/permissão de microfone ao entrar na sala e clicou para desmutar,
+  // solicita a permissão de microfone diretamente no clique do botão (User Gesture no Android/iOS)
+  if (state.isAudioMuted && state.webrtc && !state.webrtc.hasAudioDevice) {
+    try {
+      await state.webrtc.startLocalMedia(state.selectedAudioDeviceId, state.selectedVideoDeviceId, !state.isVideoOff);
+      if (state.webrtc.hasAudioDevice) {
+        document.getElementById('no-audio-warning-banner')?.classList.add('hidden');
+        setAudioMute(false, false);
+        showLayoutNotification('🎙️ Microfone ativado com sucesso!');
+        return;
+      } else {
+        showLayoutNotification('⚠️ Permita o acesso ao Microfone nas configurações do navegador/app.');
+        return;
+      }
+    } catch (err) {
+      showLayoutNotification('⚠️ Não foi possível acessar o microfone. Verifique a permissão do app.');
+      return;
+    }
+  }
   setAudioMute(!state.isAudioMuted, false);
 }
 
@@ -2843,6 +3012,14 @@ function setupCallControls() {
       btnShareScreen.setAttribute('data-tooltip', 'Compartilhar Tela');
       showLayoutNotification('Transmissão de tela finalizada.');
     } else {
+      const canShareScreen = !!(
+        (window.electronAPI && window.electronAPI.isElectron) ||
+        (navigator.mediaDevices && typeof navigator.mediaDevices.getDisplayMedia === 'function')
+      );
+      if (!canShareScreen) {
+        showLayoutNotification('📱 No celular você assiste às telas compartilhadas da mesa. Para transmitir sua tela, use no PC.');
+        return;
+      }
       openScreenShareModal();
     }
   });
@@ -3246,6 +3423,7 @@ function setupSettingsModal() {
           setAudioMute(true);
         }
         updateMicUI();
+        updateMobilePttVisibility();
         syncGlobalHotkeyWithElectron();
       };
     });
@@ -3367,6 +3545,8 @@ function setupVersionSettingsTab(modal) {
   const progressBar = document.getElementById('version-download-bar');
 
   let currentAppVersion = APP_VERSION;
+  if (versionPill) versionPill.textContent = `v${currentAppVersion}`;
+  if (versionText) versionText.innerHTML = `Versão atual: <strong>v${currentAppVersion}</strong>`;
 
   // Obter versão instalada do Electron
   if (window.electronAPI && typeof window.electronAPI.getAppVersion === 'function') {
@@ -3379,7 +3559,7 @@ function setupVersionSettingsTab(modal) {
       }
     }).catch(() => {});
   } else {
-    if (envText) envText.textContent = 'Navegador Web / PWA';
+    if (envText) envText.textContent = isStandalonePwa() ? 'Aplicativo Instalado (PWA Auto-Update)' : 'Navegador Web / PWA (Auto-Update)';
   }
 
   function setFeedback(icon, message, type = 'info') {
@@ -3412,6 +3592,13 @@ function setupVersionSettingsTab(modal) {
       // Se estiver no Electron, dispara a checagem nativa
       if (window.electronAPI && typeof window.electronAPI.checkForUpdatesManual === 'function') {
         window.electronAPI.checkForUpdatesManual();
+      } else {
+        // No modo Web / PWA, verifica imediatamente a versão do servidor Cloud e atualiza o Service Worker
+        const updatedFromServer = await checkPwaAutoUpdate(true);
+        if (updatedFromServer) {
+          setFeedback('🚀', 'Nova versão detectada no servidor! Atualizando aplicativo agora...', 'success');
+          return;
+        }
       }
 
       // Verificação direta complementar via API pública do GitHub
@@ -3768,6 +3955,437 @@ async function confirmScreenShare() {
     }
   } else {
     showLayoutNotification('Compartilhamento de tela cancelado.');
+  }
+}
+
+// ============================================================================
+// SUPORTE COMPLETO A PWA, WAKE LOCK (TELA ACESA), MEDIA SESSION (2º PLANO ANDROID)
+// E PUSH-TO-TALK TOUCH PARA CELULAR
+// ============================================================================
+let deferredPwaPrompt = null;
+let screenWakeLock = null;
+let silentKeepAliveUrl = null;
+let bgKeepAliveInterval = null;
+
+function isStandalonePwa() {
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true
+  );
+}
+
+function setupPwaAndOfflineSupport() {
+  const isElectron = !!(window.electronAPI && window.electronAPI.isElectron);
+  const statusBadge = document.getElementById('titlebar-status');
+  const btnTitlebarInstall = document.getElementById('btn-titlebar-pwa-install');
+  const lobbyInstallCard = document.getElementById('pwa-lobby-install-card');
+  const btnLobbyInstall = document.getElementById('btn-lobby-pwa-install');
+  const guideModal = document.getElementById('pwa-install-guide-modal');
+  const btnCloseGuide = document.getElementById('btn-close-pwa-guide');
+  const offlineBanner = document.getElementById('offline-indicator-banner');
+
+  // Registra Service Worker com checagem imediata de atualização (updateViaCache: 'none')
+  if (!isElectron && 'serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+    let refreshingSw = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshingSw) return;
+      refreshingSw = true;
+      if (!state.isInCall) {
+        window.location.reload();
+      } else {
+        showLayoutNotification('✨ Nova versão baixada! Será aplicada automaticamente ao sair da chamada.');
+      }
+    });
+
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('/sw.js', { updateViaCache: 'none' })
+        .then((reg) => {
+          reg.update().catch(() => {});
+          reg.addEventListener('updatefound', () => {
+            const newWorker = reg.installing;
+            if (!newWorker) return;
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                newWorker.postMessage({ type: 'SKIP_WAITING' });
+              }
+            });
+          });
+        })
+        .catch(() => {});
+    });
+
+    // Checa versão ao abrir e a cada 60 segundos enquanto no Lobby
+    checkPwaAutoUpdate(true);
+    setInterval(() => {
+      if (!state.isInCall) {
+        checkPwaAutoUpdate(true);
+      }
+    }, 60000);
+  }
+
+  // Atualiza status caso já esteja rodando como PWA instalado (Standalone)
+  const windowsDownloadCard = document.getElementById('windows-download-lobby-card');
+  const btnDownloadWindowsExe = document.getElementById('btn-download-windows-exe');
+  const labelDownloadWindows = document.getElementById('btn-download-windows-label');
+  const titleDownloadWindows = document.getElementById('windows-download-title');
+
+  const refreshInstallUi = () => {
+    if (isElectron) {
+      lobbyInstallCard?.classList.add('hidden');
+      windowsDownloadCard?.classList.add('hidden');
+      return;
+    }
+
+    const isMobileDevice = /android|iphone|ipad|ipod/i.test(navigator.userAgent || '');
+
+    // Exibe o card de download do .EXE de Windows para quem abre o site pelo navegador (PC ou para compartilhar)
+    if (!isStandalonePwa() && windowsDownloadCard) {
+      windowsDownloadCard.classList.remove('hidden');
+    }
+
+    if (isStandalonePwa()) {
+      lobbyInstallCard?.classList.add('hidden');
+      return;
+    }
+
+    if (deferredPwaPrompt || isMobileDevice) {
+      lobbyInstallCard?.classList.remove('hidden');
+    }
+  };
+
+  // Consulta a release marcada como Latest no GitHub para apontar o botão direto para o arquivo .exe
+  if (!isElectron && btnDownloadWindowsExe) {
+    fetch('https://api.github.com/repos/Hardiscore/Sussuro/releases/latest', {
+      headers: { 'Accept': 'application/vnd.github.v3+json' }
+    })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((release) => {
+        if (!release || !Array.isArray(release.assets)) return;
+        const exeAsset = release.assets.find((a) => a.name && a.name.toLowerCase().endsWith('.exe'));
+        if (exeAsset && exeAsset.browser_download_url) {
+          btnDownloadWindowsExe.href = exeAsset.browser_download_url;
+          const verTag = (release.tag_name || release.name || '').replace(/^v/, '');
+          if (verTag && labelDownloadWindows) {
+            labelDownloadWindows.textContent = `Baixar .EXE (v${verTag})`;
+          }
+          if (verTag && titleDownloadWindows) {
+            titleDownloadWindows.textContent = `App Desktop para Windows (v${verTag})`;
+          }
+        }
+      })
+      .catch(() => {});
+  }
+
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredPwaPrompt = e;
+    refreshInstallUi();
+  });
+
+  window.addEventListener('appinstalled', () => {
+    deferredPwaPrompt = null;
+    refreshInstallUi();
+    showLayoutNotification('🎉 Sussurro RPG instalado com sucesso como Aplicativo!');
+  });
+
+  const handleInstallClick = async () => {
+    if (deferredPwaPrompt) {
+      try {
+        await deferredPwaPrompt.prompt();
+        const choice = await deferredPwaPrompt.userChoice;
+        if (choice && choice.outcome === 'accepted') {
+          deferredPwaPrompt = null;
+          refreshInstallUi();
+        }
+      } catch (err) {
+        console.warn('[PWA] Erro ao exibir prompt nativo:', err);
+      }
+      return;
+    }
+    // Se o navegador não disparou beforeinstallprompt (ex: iOS Safari ou já instalado/aba anônima), abre guia prático
+    if (guideModal) {
+      guideModal.classList.remove('hidden');
+    }
+  };
+
+  if (btnTitlebarInstall) btnTitlebarInstall.onclick = handleInstallClick;
+  if (btnLobbyInstall) btnLobbyInstall.onclick = handleInstallClick;
+  if (btnCloseGuide && guideModal) {
+    btnCloseGuide.onclick = () => guideModal.classList.add('hidden');
+  }
+
+  refreshInstallUi();
+
+  // Monitoramento de conectividade Online / Offline
+  const updateOnlineStatus = () => {
+    if (!offlineBanner) return;
+    if (navigator.onLine) {
+      offlineBanner.classList.add('hidden');
+    } else {
+      offlineBanner.classList.remove('hidden');
+    }
+  };
+
+  window.addEventListener('online', () => {
+    updateOnlineStatus();
+    showLayoutNotification('🌐 Conexão com a internet restabelecida!');
+  });
+  window.addEventListener('offline', updateOnlineStatus);
+  updateOnlineStatus();
+}
+
+/**
+ * Solicita Screen Wake Lock para manter a tela do Android/iOS acesa enquanto estiver na chamada de RPG
+ */
+async function acquireWakeLock() {
+  const badge = document.getElementById('call-wakelock-badge');
+  if (badge) badge.classList.remove('hidden');
+
+  if (!('wakeLock' in navigator)) return;
+  try {
+    if (screenWakeLock) return;
+    screenWakeLock = await navigator.wakeLock.request('screen');
+    screenWakeLock.addEventListener('release', () => {
+      screenWakeLock = null;
+    });
+    console.log('[WakeLock] Tela mantida ativa para a sessão de RPG.');
+  } catch (err) {
+    console.debug('[WakeLock] Não concedido no momento:', err.message);
+  }
+}
+
+async function releaseWakeLock() {
+  const badge = document.getElementById('call-wakelock-badge');
+  if (badge) badge.classList.add('hidden');
+
+  if (screenWakeLock) {
+    try {
+      await screenWakeLock.release();
+    } catch (e) {}
+    screenWakeLock = null;
+  }
+}
+
+// Reativa Wake Lock, AudioContext e verifica atualizações automaticamente ao voltar para o app no Android/iOS
+document.addEventListener('visibilitychange', () => {
+  if (state.isInCall) {
+    if (document.visibilityState === 'visible') {
+      acquireWakeLock();
+    }
+    // Garante que os AudioContexts de voz e reprodução não sejam suspensos em segundo plano no celular
+    resumeAllCallAudioContexts();
+  } else if (document.visibilityState === 'visible') {
+    checkPwaAutoUpdate(true);
+  }
+});
+
+/**
+ * Consulta a versão ativa no servidor (/api/version) e no Service Worker.
+ * Se houver nova versão publicada, limpa caches antigos e recarrega o PWA automaticamente.
+ */
+async function checkPwaAutoUpdate(autoReload = true) {
+  const isElectron = !!(window.electronAPI && window.electronAPI.isElectron);
+  if (isElectron || !window.location.protocol.startsWith('http')) return false;
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const reg = await navigator.serviceWorker.getRegistration();
+      if (reg) {
+        await reg.update().catch(() => {});
+      }
+    }
+
+    const res = await fetch(`/api/version?t=${Date.now()}`, {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' }
+    });
+    if (!res.ok) return false;
+
+    const data = await res.json();
+    const serverVersion = (data?.version || '').trim();
+    if (serverVersion && serverVersion !== APP_VERSION) {
+      console.log(`[PWA AutoUpdate] Nova versão detectada no servidor: v${serverVersion} (atual: v${APP_VERSION})`);
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+      if (autoReload && !state.isInCall) {
+        showLayoutNotification(`🚀 Atualizando Sussurro para v${serverVersion}...`);
+        setTimeout(() => {
+          window.location.reload();
+        }, 600);
+      }
+      return true;
+    }
+  } catch (err) {
+    // Offline ou sem endpoint /api/version disponível
+  }
+  return false;
+}
+
+function resumeAllCallAudioContexts() {
+  if (!state.webrtc) return;
+  try {
+    if (state.webrtc.audioContext && state.webrtc.audioContext.state === 'suspended') {
+      state.webrtc.audioContext.resume().catch(() => {});
+    }
+    if (state.webrtc.remoteAudioContext && state.webrtc.remoteAudioContext.state === 'suspended') {
+      state.webrtc.remoteAudioContext.resume().catch(() => {});
+    }
+    if (state.webrtc.mixerCtx && state.webrtc.mixerCtx.state === 'suspended') {
+      state.webrtc.mixerCtx.resume().catch(() => {});
+    }
+  } catch (e) {}
+}
+
+/**
+ * Gera um mini arquivo WAV silencioso em memória para manter a Media Session do Android ativa em segundo plano
+ */
+function getSilentWavBlobUrl() {
+  if (silentKeepAliveUrl) return silentKeepAliveUrl;
+  const sampleRate = 8000;
+  const numSamples = sampleRate; // 1 segundo de silêncio
+  const buffer = new ArrayBuffer(44 + numSamples * 2);
+  const view = new DataView(buffer);
+
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + numSamples * 2, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true); // PCM
+  view.setUint16(22, 1, true); // Mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, numSamples * 2, true);
+
+  const blob = new Blob([buffer], { type: 'audio/wav' });
+  silentKeepAliveUrl = URL.createObjectURL(blob);
+  return silentKeepAliveUrl;
+}
+
+/**
+ * Inicia Media Session e Keep-Alive de áudio para o Android não encerrar a chamada ao minimizar o PWA
+ */
+function startBackgroundAudioKeepAlive(roomId) {
+  try {
+    const audioEl = document.getElementById('bg-keepalive-audio');
+    if (audioEl) {
+      audioEl.src = getSilentWavBlobUrl();
+      audioEl.muted = false;
+      audioEl.volume = 0.01;
+      audioEl.play().catch(() => {});
+    }
+
+    if ('mediaSession' in navigator && typeof MediaMetadata !== 'undefined') {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: `Sala RPG: ${roomId}`,
+        artist: `${state.userName} (${state.userRole === 'mestre' ? 'Mestre' : 'Jogador'})`,
+        album: 'Sussurro RPG — Chamada de Voz Ativa',
+        artwork: [
+          { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
+          { src: '/pwa-512x512.png', sizes: '512x512', type: 'image/png' }
+        ]
+      });
+      navigator.mediaSession.playbackState = 'playing';
+
+      try {
+        navigator.mediaSession.setActionHandler('play', () => {
+          audioEl?.play().catch(() => {});
+          resumeAllCallAudioContexts();
+        });
+        navigator.mediaSession.setActionHandler('pause', () => {
+          // Mantém tocando para não derrubar a chamada em segundo plano
+          audioEl?.play().catch(() => {});
+          resumeAllCallAudioContexts();
+        });
+        navigator.mediaSession.setActionHandler('hangup', () => {
+          leaveCall();
+        });
+      } catch (e) {}
+    }
+
+    if (bgKeepAliveInterval) clearInterval(bgKeepAliveInterval);
+    bgKeepAliveInterval = setInterval(() => {
+      if (!state.isInCall) return;
+      resumeAllCallAudioContexts();
+      if (audioEl && audioEl.paused) {
+        audioEl.play().catch(() => {});
+      }
+      // Garante que os elementos <audio> dos participantes continuem reproduzindo
+      document.querySelectorAll('#video-grid audio').forEach(peerAudio => {
+        if (peerAudio.paused && !peerAudio.muted) {
+          peerAudio.play().catch(() => {});
+        }
+      });
+    }, 4000);
+  } catch (err) {
+    console.debug('[BackgroundAudio] MediaSession aviso:', err);
+  }
+}
+
+function stopBackgroundAudioKeepAlive() {
+  if (bgKeepAliveInterval) {
+    clearInterval(bgKeepAliveInterval);
+    bgKeepAliveInterval = null;
+  }
+  try {
+    const audioEl = document.getElementById('bg-keepalive-audio');
+    if (audioEl) {
+      audioEl.pause();
+    }
+    if ('mediaSession' in navigator) {
+      navigator.mediaSession.playbackState = 'none';
+      navigator.mediaSession.metadata = null;
+    }
+  } catch (e) {}
+}
+
+/**
+ * Configura o botão Touch Flutuante de Push-to-Talk para dispositivos móveis / Modo PTT
+ */
+function setupMobilePushToTalk() {
+  const btnMobilePtt = document.getElementById('btn-mobile-ptt');
+  const labelMobilePtt = document.getElementById('mobile-ptt-label');
+  if (!btnMobilePtt) return;
+
+  const startHold = (e) => {
+    if (e.cancelable) e.preventDefault();
+    btnMobilePtt.classList.add('ptt-holding');
+    if (labelMobilePtt) labelMobilePtt.textContent = '🎙️ Transmitindo Voz...';
+    handlePttDown();
+  };
+
+  const endHold = (e) => {
+    if (e && e.cancelable) e.preventDefault();
+    btnMobilePtt.classList.remove('ptt-holding');
+    if (labelMobilePtt) labelMobilePtt.textContent = 'Segure para Falar (PTT)';
+    handlePttUp();
+  };
+
+  btnMobilePtt.addEventListener('touchstart', startHold, { passive: false });
+  btnMobilePtt.addEventListener('touchend', endHold, { passive: false });
+  btnMobilePtt.addEventListener('touchcancel', endHold, { passive: false });
+  btnMobilePtt.addEventListener('mousedown', startHold);
+  btnMobilePtt.addEventListener('mouseup', endHold);
+  btnMobilePtt.addEventListener('mouseleave', endHold);
+}
+
+function updateMobilePttVisibility() {
+  const wrapper = document.getElementById('mobile-ptt-wrapper');
+  if (!wrapper) return;
+  if (state.isInCall && state.micActivationMode === 'push_to_talk') {
+    wrapper.classList.remove('hidden');
+  } else {
+    wrapper.classList.add('hidden');
   }
 }
 

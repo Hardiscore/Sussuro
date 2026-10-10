@@ -78,9 +78,39 @@ async function startServer() {
 
   app.use(express.json());
 
-  // API de Saúde
+  // API de Saúde e Versão (Usada pelo Auto-Updater do PWA)
   app.get("/api/health", (_req: Request, res: Response) => {
-    res.json({ status: "ok", activeRooms: rooms.size });
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.json({ status: "ok", version: "1.1.0", activeRooms: rooms.size });
+  });
+
+  app.get("/api/version", (_req: Request, res: Response) => {
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+    res.json({ version: "1.1.0", updatedAt: "09/10/2026" });
+  });
+
+  // Rota Permanente para Download do Instalador Windows (.exe) da Release marcada como Latest no GitHub
+  app.get("/api/download/windows", async (_req: Request, res: Response) => {
+    try {
+      const ghRes = await fetch("https://api.github.com/repos/Hardiscore/Sussuro/releases/latest", {
+        headers: {
+          "Accept": "application/vnd.github.v3+json",
+          "User-Agent": "Sussurro-RPG-Server"
+        }
+      });
+      if (ghRes.ok) {
+        const releaseData: any = await ghRes.json();
+        const assets: any[] = Array.isArray(releaseData?.assets) ? releaseData.assets : [];
+        const exeAsset = assets.find((a) => typeof a?.name === "string" && a.name.toLowerCase().endsWith(".exe"));
+        if (exeAsset && exeAsset.browser_download_url) {
+          return res.redirect(302, exeAsset.browser_download_url);
+        }
+      }
+    } catch (err) {
+      console.warn("[DownloadRedirect] Erro ao consultar GitHub API:", err);
+    }
+    // Fallback direto para o link permanente do GitHub Latest
+    return res.redirect(302, "https://github.com/Hardiscore/Sussuro/releases/latest");
   });
 
   // 1. Entrar na sala de RPG
@@ -93,7 +123,7 @@ async function startServer() {
     }
 
     const room = getOrCreateRoom(roomId);
-    const clientVersion = (userInfo && userInfo.appVersion) ? String(userInfo.appVersion).trim() : '1.0.6';
+    const clientVersion = (userInfo && userInfo.appVersion) ? String(userInfo.appVersion).trim() : '1.1.0';
 
     // Verificação estrita de versão: não permite entrar em sala com versão incompatível
     if (room.peers.size > 0 && room.requiredVersion && room.requiredVersion !== clientVersion) {
@@ -334,7 +364,7 @@ async function startServer() {
   // Vite middleware para desenvolvimento / estático para produção
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: false },
       appType: "spa",
     });
     app.use(vite.middlewares);

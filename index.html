@@ -2,12 +2,21 @@
 <html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>Sussurro - Chamadas de Voz & Vídeo RPG</title>
   <meta name="description" content="Sussurro - Aplicativo de chamadas de voz e vídeo em grupo estilo Discord com sinalização Firebase Realtime Database para RPG de mesa." />
   <meta property="og:title" content="Sussurro - Chamadas de Voz & Vídeo RPG" />
   <meta property="og:description" content="Sussurro - Aplicativo de chamadas de voz e vídeo em grupo estilo Discord com sinalização Firebase Realtime Database para RPG de mesa." />
   <meta property="og:type" content="website" />
+  <meta name="theme-color" content="#1e1f22" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Sussurro" />
+  <link rel="manifest" href="/manifest.webmanifest" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
   <link rel="stylesheet" href="./styles.css" />
   <script type="importmap">
   {
@@ -20,8 +29,8 @@
 </head>
 <body>
 
-  <!-- Custom Titlebar para Electron / Desktop -->
-  <header id="custom-titlebar">
+  <!-- Custom Titlebar exclusiva para Electron Desktop (oculta no Web/PWA/Celular) -->
+  <header id="custom-titlebar" class="hidden">
     <div class="titlebar-brand">
       <!-- Ícone D20 / Headset -->
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -30,19 +39,21 @@
         <path d="M20 6.5l-8 5.5-8-5.5"/>
       </svg>
       <span>Sussurro</span>
-      <span class="titlebar-status-badge" id="titlebar-status">WebRTC P2P Mesh</span>
+      <span class="titlebar-status-badge" id="titlebar-status">Electron Desktop</span>
     </div>
-    
-    <div class="titlebar-controls" id="window-controls">
-      <button class="window-btn" id="btn-window-minimize" title="Minimizar">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg>
-      </button>
-      <button class="window-btn" id="btn-window-maximize" title="Maximizar / Restaurar">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
-      </button>
-      <button class="window-btn close-btn" id="btn-window-close" title="Fechar">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
-      </button>
+
+    <div class="titlebar-right-actions" style="display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag;">
+      <div class="titlebar-controls" id="window-controls">
+        <button class="window-btn" id="btn-window-minimize" title="Minimizar">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg>
+        </button>
+        <button class="window-btn" id="btn-window-maximize" title="Maximizar / Restaurar">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+        </button>
+        <button class="window-btn close-btn" id="btn-window-close" title="Fechar">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
     </div>
   </header>
 
@@ -57,7 +68,7 @@
         <!-- Formulário de Entrada -->
         <div class="lobby-card">
           <div class="lobby-header">
-            <h1 class="lobby-title">
+            <h1 class="lobby-title" id="lobby-title-heading" title="Toque 5x ou Ctrl+Shift+M para alternar Modo Mestre (GM)">
               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#5865f2" stroke-width="2">
                 <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
                 <circle cx="9" cy="7" r="4"></circle>
@@ -69,6 +80,35 @@
             <p class="lobby-subtitle">
               Chamadas para as sessões de Lurya e outros joguinhos, por que não.
             </p>
+          </div>
+
+          <!-- Banner In-App para Instalação do PWA no Android / iOS / Desktop -->
+          <div id="pwa-lobby-install-card" class="pwa-install-banner hidden">
+            <div class="pwa-install-banner-info">
+              <div class="pwa-install-icon">📲</div>
+              <div>
+                <div class="pwa-install-title">Instalar Sussurro RPG como App (v1.1.0)</div>
+                <div class="pwa-install-sub">Roda em tela cheia, atualiza sozinho e mantém sua voz ativa em 2º plano. Se o Android exibir aviso do Play Protect, toque em <strong>"Instalar assim mesmo"</strong>.</div>
+              </div>
+            </div>
+            <button type="button" class="btn btn-primary pwa-install-action-btn" id="btn-lobby-pwa-install">
+              <span>Instalar</span>
+            </button>
+          </div>
+
+          <!-- Card de Download Direto para Windows (.exe Latest do GitHub) -->
+          <div id="windows-download-lobby-card" class="windows-download-banner hidden">
+            <div class="pwa-install-banner-info">
+              <div class="pwa-install-icon">💻</div>
+              <div>
+                <div class="pwa-install-title" id="windows-download-title">App Desktop para Windows (.exe)</div>
+                <div class="pwa-install-sub">Baixe o instalador oficial com atalhos globais de teclado/mouse em 2º plano e atualização automática.</div>
+              </div>
+            </div>
+            <a href="/api/download/windows" id="btn-download-windows-exe" class="btn btn-secondary windows-download-btn" download>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              <span id="btn-download-windows-label">Baixar .EXE</span>
+            </a>
           </div>
 
           <div class="form-group">
@@ -150,14 +190,27 @@
             <div class="preview-avatar" id="lobby-preview-avatar" style="display: none;">
               <span id="lobby-avatar-letter">A</span>
             </div>
+
+            <!-- Botão / Overlay interativo caso o navegador/Android exija toque para pedir permissão de Mic/Câmera -->
+            <div id="lobby-permission-prompt" class="lobby-permission-overlay hidden">
+              <div class="lobby-permission-icon">🎙️📹</div>
+              <div class="lobby-permission-title" id="lobby-permission-title">Permitir Microfone e Câmera</div>
+              <div class="lobby-permission-desc" id="lobby-permission-desc">
+                Toque no botão abaixo para o navegador solicitar o acesso ao seu microfone e câmera.
+              </div>
+              <button type="button" class="btn btn-primary" id="btn-request-permissions" style="padding: 9px 16px; font-size: 13px; flex: 0;">
+                <span>🔓 Liberar Microfone e Câmera</span>
+              </button>
+            </div>
+
             <div class="preview-status-badges">
               <span class="status-badge" id="badge-lobby-audio">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
-                Mic Ativo
+                <span id="badge-lobby-audio-text">Mic Ativo</span>
               </span>
               <span class="status-badge" id="badge-lobby-video">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-                Vídeo Ativo
+                <span id="badge-lobby-video-text">Vídeo Ativo</span>
               </span>
             </div>
           </div>
@@ -252,6 +305,11 @@
           <div class="connection-indicator">
             <div class="indicator-dot" id="call-ice-dot"></div>
             <span id="call-ice-status">WebRTC Conectado</span>
+          </div>
+
+          <!-- Indicador de Wake Lock / Segundo Plano Ativo (Mobile / PWA) -->
+          <div class="wakelock-badge hidden" id="call-wakelock-badge" title="Tela mantida acesa e áudio protegido em segundo plano">
+            <span>🛡️ Voz Ativa</span>
           </div>
 
           <!-- Seletor de Modo de Exibição / Layout -->
@@ -405,9 +463,15 @@
           </div>
         </div>
 
+        <!-- Botão Flutuante Touch para Push-to-Talk (Celular / Modo PTT) -->
+        <div id="mobile-ptt-wrapper" class="mobile-ptt-wrapper hidden">
+          <button type="button" id="btn-mobile-ptt" class="mobile-ptt-btn">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+            <span id="mobile-ptt-label">Segure para Falar (PTT)</span>
+          </button>
+        </div>
+
       </div>
-
-
 
     </section>
 
@@ -723,16 +787,16 @@
                 <div>
                   <div style="font-weight: 700; font-size: 16px; color: var(--text-normal); display: flex; align-items: center; gap: 8px;">
                     <span>Sussurro RPG</span>
-                    <span id="version-pill-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple); font-size: 11px;">v1.0.4</span>
+                    <span id="version-pill-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple); font-size: 11px;">v1.1.0</span>
                   </div>
                   <div style="font-size: 13px; color: var(--text-muted); margin-top: 2px;" id="version-current-text">
-                    Versão atual: <strong>v1.0.4</strong>
+                    Versão atual: <strong>v1.1.0</strong>
                   </div>
                 </div>
               </div>
 
               <span class="tag-free" id="version-status-indicator" style="background: rgba(35, 165, 90, 0.15); color: var(--accent-green); font-size: 12px; padding: 4px 10px;">
-                ✓ Ativo
+                ✓ Ativo (Auto-Update)
               </span>
             </div>
 
@@ -743,7 +807,7 @@
               </div>
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span>Quando foi atualizado:</span>
-                <strong style="color: var(--accent-gold);" id="version-updated-at">29/09/2026</strong>
+                <strong style="color: var(--accent-gold);" id="version-updated-at">09/10/2026</strong>
               </div>
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span>Canal de Lançamento:</span>
@@ -875,11 +939,11 @@
         <div class="version-compare-card">
           <div class="version-compare-row">
             <span class="version-label" style="font-size: 12px; color: var(--text-muted);">Sua versão instalada:</span>
-            <span class="version-badge your-ver" id="mismatch-your-version">v1.0.6</span>
+            <span class="version-badge your-ver" id="mismatch-your-version">v1.1.0</span>
           </div>
           <div class="version-compare-row">
             <span class="version-label" style="font-size: 12px; color: var(--text-muted);">Versão requerida na chamada:</span>
-            <span class="version-badge room-ver" id="mismatch-room-version">v1.0.5</span>
+            <span class="version-badge room-ver" id="mismatch-room-version">v1.1.0</span>
           </div>
         </div>
         <p class="warning-help-text">
@@ -893,6 +957,47 @@
       </div>
     </div>
   </div>
+
+  <!-- Modal de Instruções de Instalação Manual PWA (iOS Safari / Android Navegadores) -->
+  <div id="pwa-install-guide-modal" class="modal hidden">
+    <div class="modal-content warning-modal-box" style="border-color: rgba(88, 101, 242, 0.45);">
+      <div class="modal-header-danger" style="background: rgba(88, 101, 242, 0.12); border-bottom-color: rgba(88, 101, 242, 0.25);">
+        <div class="modal-danger-icon">📲</div>
+        <h2 class="modal-title" style="color: #fff; font-size: 16px;">Instalar Sussurro RPG no Celular</h2>
+      </div>
+      <div class="modal-body" style="font-size: 13px; color: var(--text-normal); line-height: 1.6;">
+        <div style="background: rgba(240, 178, 50, 0.12); border: 1px solid rgba(240, 178, 50, 0.35); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 12px;">
+          🛡️ <strong>Aviso do Google Play Protect no Samsung / Android:</strong><br/>
+          Se aparecer a janela <em>"App de risco bloqueado / Esse app foi criado para uma versão mais antiga do Android"</em>, basta tocar no texto <strong>"Instalar assim mesmo"</strong> (logo acima do botão azul "Entendi"), ou abrir o link pelo <strong>Google Chrome</strong>.
+        </div>
+        <p id="pwa-guide-android-steps" style="margin-bottom: 12px;">
+          <strong>No Android (Chrome / Edge / Samsung Internet):</strong><br/>
+          1. Toque no menu <strong>⋮</strong> ou <strong>☰</strong> do navegador.<br/>
+          2. Selecione <strong>"Adicionar à tela inicial"</strong> ou <strong>"Instalar aplicativo"</strong>.<br/>
+          3. O PWA atualiza sozinho sempre que uma nova versão for publicada!
+        </p>
+        <p id="pwa-guide-ios-steps" style="margin-bottom: 8px;">
+          <strong>No iPhone / iPad (Safari):</strong><br/>
+          1. Toque no botão <strong>Compartilhar</strong> (ícone de quadrado com seta para cima na barra inferior).<br/>
+          2. Role para baixo e toque em <strong>"Adicionar à Tela de Início"</strong>.
+        </p>
+      </div>
+      <div class="modal-footer" style="margin-top: 16px; display: flex; justify-content: flex-end;">
+        <button id="btn-close-pwa-guide" class="btn btn-primary" type="button">
+          Fechar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Indicador de Modo Offline (PWA) -->
+  <div id="offline-indicator-banner" class="offline-indicator-banner hidden">
+    <span class="offline-dot"></span>
+    <span>Sem conexão com a internet — Tentando reconectar...</span>
+  </div>
+
+  <!-- Elemento de áudio silencioso para Media Session / Keep-Alive em segundo plano no Android -->
+  <audio id="bg-keepalive-audio" loop playsinline muted style="display: none;"></audio>
 
   <script type="module" src="./app.js"></script>
 </body>

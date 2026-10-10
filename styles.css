@@ -46,11 +46,19 @@ body {
   background-color: var(--bg-app);
   color: var(--text-normal);
   height: 100vh;
+  height: 100dvh;
   width: 100vw;
   overflow: hidden;
   user-select: none;
   display: flex;
   flex-direction: column;
+}
+
+input,
+textarea,
+select {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 /* ==========================================
@@ -129,7 +137,8 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 36px);
+  height: 100%;
+  min-height: 0;
   position: relative;
   overflow: hidden;
 }
@@ -138,44 +147,64 @@ body {
   flex: 1;
   width: 100%;
   height: 100%;
+  min-height: 0;
   display: flex;
   flex-direction: column;
 }
 
 /* Regra global para ocultar elementos */
-.hidden {
-  display: none !important;
-}
-
-.screen.hidden {
+.hidden,
+.screen.hidden,
+#lobby-screen.hidden,
+#call-screen.hidden {
   display: none !important;
 }
 
 /* ==========================================
    LOBBY SCREEN (Tela Inicial e Configuração)
    ========================================== */
-#lobby-screen {
+#lobby-screen:not(.hidden) {
   background: radial-gradient(circle at top, #2b2d31 0%, #1e1f22 70%);
-  overflow-y: auto;
-  padding: 32px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow-y: auto !important;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: calc(28px + env(safe-area-inset-top, 0px)) 24px calc(48px + env(safe-area-inset-bottom, 0px));
+  display: block;
 }
 
 .lobby-wrapper {
   width: 100%;
   max-width: 1080px;
+  margin: 0 auto;
   display: grid;
   grid-template-columns: 1.1fr 0.9fr;
   gap: 32px;
-  align-items: center;
+  align-items: start;
+}
+
+@media (min-width: 901px) and (min-height: 760px) {
+  #lobby-screen:not(.hidden) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .lobby-wrapper {
+    margin: auto;
+    align-items: center;
+  }
 }
 
 @media (max-width: 900px) {
+  #lobby-screen:not(.hidden) {
+    display: block;
+    padding: calc(20px + env(safe-area-inset-top, 0px)) 14px calc(48px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
   .lobby-wrapper {
+    margin: 0 auto !important;
     grid-template-columns: 1fr;
-    gap: 24px;
+    gap: 20px;
   }
 }
 
@@ -658,7 +687,7 @@ main#app-container > section#lobby-screen .lobby-subtitle,
 /* ==========================================
    CALL SCREEN (Sala da Sessão de RPG)
    ========================================== */
-#call-screen {
+#call-screen:not(.hidden) {
   display: flex;
   flex-direction: column;
   background-color: var(--bg-app);
@@ -2392,4 +2421,344 @@ main#app-container > section#lobby-screen .lobby-subtitle,
     transform: translateY(0);
   }
 }
+
+/* ==========================================================================
+   PWA INSTALL UI, MOBILE PUSH-TO-TALK, WAKE LOCK & RESPONSIVIDADE ANDROID/IOS
+   ========================================================================== */
+
+.pwa-titlebar-install-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: linear-gradient(135deg, #5865f2 0%, #4752c4 100%);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: var(--radius-pill);
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 2px 8px rgba(88, 101, 242, 0.35);
+}
+
+.pwa-titlebar-install-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(88, 101, 242, 0.5);
+}
+
+.pwa-install-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: linear-gradient(135deg, rgba(88, 101, 242, 0.16) 0%, rgba(71, 82, 196, 0.08) 100%);
+  border: 1px solid rgba(88, 101, 242, 0.45);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 18px;
+}
+
+.pwa-install-banner-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pwa-install-icon {
+  font-size: 22px;
+  flex-shrink: 0;
+}
+
+.pwa-install-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-bright);
+}
+
+.pwa-install-sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+
+.pwa-install-action-btn {
+  padding: 8px 14px !important;
+  font-size: 12px !important;
+  flex-shrink: 0;
+}
+
+.windows-download-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  background: rgba(43, 45, 49, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md);
+  padding: 11px 14px;
+  margin-bottom: 18px;
+}
+
+.windows-download-btn {
+  padding: 8px 14px !important;
+  font-size: 12px !important;
+  flex-shrink: 0;
+  white-space: nowrap;
+  border-color: rgba(88, 101, 242, 0.5) !important;
+  color: #ffffff !important;
+  background: rgba(88, 101, 242, 0.2) !important;
+}
+
+.windows-download-btn:hover {
+  background: var(--accent-blurple) !important;
+  border-color: var(--accent-blurple) !important;
+}
+
+.wakelock-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(35, 165, 90, 0.15);
+  color: var(--accent-green);
+  border: 1px solid rgba(35, 165, 90, 0.35);
+  white-space: nowrap;
+}
+
+/* Botão Flutuante Touch de Push-to-Talk para Celular / Modo PTT */
+.mobile-ptt-wrapper {
+  position: fixed;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 950;
+  display: flex;
+  justify-content: center;
+  pointer-events: auto;
+}
+
+.mobile-ptt-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(30, 31, 34, 0.94);
+  backdrop-filter: blur(10px);
+  color: var(--text-bright);
+  border: 2px solid var(--accent-blurple);
+  border-radius: var(--radius-pill);
+  padding: 14px 28px;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  transition: all 0.12s ease;
+}
+
+.mobile-ptt-btn.ptt-holding {
+  background: var(--accent-green);
+  border-color: #ffffff;
+  color: #ffffff;
+  transform: scale(1.06);
+  box-shadow: 0 0 24px rgba(35, 165, 90, 0.75);
+}
+
+/* Indicador Offline */
+.offline-indicator-banner {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(240, 178, 50, 0.95);
+  color: #111214;
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+}
+
+.offline-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #111214;
+  animation: pulse 1.4s infinite;
+}
+
+/* Overlay de Permissão de Microfone e Câmera no Lobby */
+.lobby-permission-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(17, 18, 20, 0.92);
+  backdrop-filter: blur(6px);
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 18px;
+  gap: 8px;
+}
+
+.lobby-permission-icon {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.lobby-permission-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-bright);
+}
+
+.lobby-permission-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  max-width: 300px;
+  line-height: 1.4;
+  margin-bottom: 4px;
+}
+
+/* Responsividade Mobile / Android / Telas Verticais */
+@media (max-width: 768px) {
+  html,
+  body {
+    height: 100%;
+    height: 100dvh;
+    overflow: hidden;
+  }
+
+  #app-container {
+    height: 100%;
+    min-height: 0;
+  }
+
+  #lobby-screen:not(.hidden) {
+    display: block;
+    height: 100% !important;
+    overflow-y: auto !important;
+    padding: calc(20px + env(safe-area-inset-top, 0px)) 12px calc(48px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  .lobby-wrapper {
+    margin: 0 auto !important;
+  }
+
+  .lobby-card {
+    padding: 18px 16px;
+  }
+
+  /* Evita zoom automático do iOS/Android ao focar no campo de Nome ou Sala */
+  .form-input {
+    font-size: 16px;
+  }
+
+  .call-header {
+    height: auto !important;
+    min-height: 54px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: calc(8px + env(safe-area-inset-top, 0px)) 10px 8px !important;
+    justify-content: space-between;
+  }
+
+  .room-identity {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .control-bar-wrapper {
+    position: static !important;
+    transform: none !important;
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    order: 3;
+  }
+
+  .control-bar {
+    width: 100%;
+    justify-content: space-evenly;
+    padding: 5px 8px;
+  }
+
+  .header-meta {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 6px;
+    order: 2;
+  }
+
+  .connection-indicator span {
+    font-size: 11px;
+  }
+
+  #video-grid {
+    padding: 8px !important;
+    gap: 8px !important;
+    overflow-y: auto;
+  }
+
+  /* Em telas verticais de celular com 2 a 4 pessoas, empilha melhor os cards */
+  #video-grid[data-count="2"],
+  #video-grid[data-count="3"],
+  #video-grid[data-count="4"] {
+    grid-template-columns: 1fr !important;
+    grid-auto-rows: minmax(160px, 1fr);
+  }
+
+  /* Modal de Configurações adaptado para celular */
+  .settings-window {
+    width: 96vw !important;
+    height: 90dvh !important;
+    flex-direction: column !important;
+  }
+
+  .settings-sidebar {
+    width: 100% !important;
+    flex-direction: row !important;
+    overflow-x: auto !important;
+    padding: 10px 12px !important;
+    gap: 6px !important;
+    border-right: none !important;
+    border-bottom: 1px solid var(--border-subtle);
+    flex-shrink: 0;
+  }
+
+  .settings-sidebar-header {
+    display: none;
+  }
+
+  .settings-nav-item {
+    white-space: nowrap;
+    padding: 8px 12px !important;
+    font-size: 12px !important;
+    margin-bottom: 0 !important;
+  }
+
+  .settings-content {
+    padding: 18px 16px 32px !important;
+  }
+
+  #dice-roller-modal {
+    width: calc(100vw - 24px) !important;
+    right: 12px !important;
+    left: 12px !important;
+  }
+}
+
 
