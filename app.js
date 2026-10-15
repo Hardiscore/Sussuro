@@ -7,6 +7,7 @@
 
 import { TavernWebRTC, getSavedIceServers, saveIceServers, DEFAULT_ICE_SERVERS } from './webrtc.js';
 import { getStoredFirebaseConfig, saveFirebaseConfig, resetFirebaseConfig, BUILTIN_FIREBASE_CONFIG } from './firebase-config.js';
+import { videoEffects } from './video-effects.js';
 
 const STORAGE_KEYS = {
   USERNAME: 'tavern_username',
@@ -22,8 +23,105 @@ const STORAGE_KEYS = {
   LAYOUT_MODE: 'tavern_layout_mode',
   FIXED_GRID_SLOTS: 'tavern_fixed_grid_slots',
   SOUND_FEEDBACK: 'tavern_sound_feedback',
-  SAVED_ROOMS: 'tavern_saved_rooms'
+  SAVED_ROOMS: 'tavern_saved_rooms',
+  // Filtros, Cenários e Avatar Reativo (PNGTuber)
+  CUSTOM_AVATAR: 'tavern_custom_avatar',
+  PNGTUBER_BOUNCE: 'tavern_pngtuber_bounce',
+  PNGTUBER_GLOW: 'tavern_pngtuber_glow',
+  BG_PRESET: 'tavern_bg_preset',
+  CUSTOM_BG: 'tavern_custom_bg',
+  ACCESSORY: 'tavern_accessory',
+  CUSTOM_ACCESSORY: 'tavern_custom_accessory',
+  ACCESSORY_CONFIG: 'tavern_accessory_config',
+  COLOR_FILTER: 'tavern_color_filter',
+  RPG_GESTURE_MODE: 'tavern_rpg_gesture_mode'
 };
+
+// ============================================================================
+// COFRE PERSISTENTE DE MÍDIAS DE RPG (INDEXEDDB SEGURO ANTI-RESET)
+// ============================================================================
+export const RPGAssetVault = {
+  dbName: 'SussurroRPG_Vault',
+  version: 1,
+  _dbPromise: null,
+
+  getDb() {
+    if (!this._dbPromise) {
+      this._dbPromise = new Promise((resolve) => {
+        if (typeof indexedDB === 'undefined') {
+          return resolve(null);
+        }
+        const req = indexedDB.open(this.dbName, this.version);
+        req.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains('backgrounds')) {
+            db.createObjectStore('backgrounds', { keyPath: 'id' });
+          }
+          if (!db.objectStoreNames.contains('accessories')) {
+            db.createObjectStore('accessories', { keyPath: 'id' });
+          }
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => {
+          console.warn('[RPGAssetVault] Erro ao abrir IndexedDB:', req.error);
+          resolve(null);
+        };
+      });
+    }
+    return this._dbPromise;
+  },
+
+  async getAll(storeName) {
+    try {
+      const db = await this.getDb();
+      if (!db) return [];
+      return new Promise((resolve) => {
+        const tx = db.transaction(storeName, 'readonly');
+        const store = tx.objectStore(storeName);
+        const req = store.getAll();
+        req.onsuccess = () => resolve(req.result || []);
+        req.onerror = () => resolve([]);
+      });
+    } catch (e) {
+      return [];
+    }
+  },
+
+  async save(storeName, item) {
+    try {
+      const db = await this.getDb();
+      if (!db) return false;
+      return new Promise((resolve) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        store.put(item);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+      });
+    } catch (e) {
+      return false;
+    }
+  },
+
+  async remove(storeName, id) {
+    try {
+      const db = await this.getDb();
+      if (!db) return false;
+      return new Promise((resolve) => {
+        const tx = db.transaction(storeName, 'readwrite');
+        const store = tx.objectStore(storeName);
+        store.delete(id);
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+      });
+    } catch (e) {
+      return false;
+    }
+  }
+};
+
+export const customBackgroundsMap = new Map();
+export const customAccessoriesMap = new Map();
 
 // Configuração de paginação do Lobby
 export const ROOMS_PER_PAGE = 2; // Exatamente no máximo 2 salas visíveis por vez no lobby
@@ -52,6 +150,12 @@ const StorageService = {
   },
 
   getAllPreferences() {
+    let accCfg = { scale: 100, x: 0, y: -35, anchor: 'head' };
+    try {
+      const savedCfg = this.get(STORAGE_KEYS.ACCESSORY_CONFIG, null);
+      if (savedCfg) accCfg = Object.assign(accCfg, JSON.parse(savedCfg));
+    } catch (e) {}
+
     return {
       userName: this.get(STORAGE_KEYS.USERNAME, 'Aventureiro'),
       userRole: this.get(STORAGE_KEYS.ROLE, 'jogador'),
@@ -65,7 +169,18 @@ const StorageService = {
       noiseGateThreshold: parseInt(this.get(STORAGE_KEYS.NOISE_GATE_THRESHOLD, '14'), 10) || 14,
       layoutMode: this.get(STORAGE_KEYS.LAYOUT_MODE, 'movel'),
       fixedGridSlots: Math.max(1, Math.min(15, parseInt(this.get(STORAGE_KEYS.FIXED_GRID_SLOTS, '5'), 10) || 5)),
-      soundFeedback: this.get(STORAGE_KEYS.SOUND_FEEDBACK, 'true') !== 'false'
+      soundFeedback: this.get(STORAGE_KEYS.SOUND_FEEDBACK, 'true') !== 'false',
+      // Preferências de Filtros e Avatar
+      customAvatar: this.get(STORAGE_KEYS.CUSTOM_AVATAR, null),
+      pngtuberBounce: this.get(STORAGE_KEYS.PNGTUBER_BOUNCE, 'true') !== 'false',
+      pngtuberGlow: this.get(STORAGE_KEYS.PNGTUBER_GLOW, 'true') !== 'false',
+      bgPreset: this.get(STORAGE_KEYS.BG_PRESET, 'none'),
+      customBg: this.get(STORAGE_KEYS.CUSTOM_BG, null),
+      selectedAccessory: this.get(STORAGE_KEYS.ACCESSORY, 'none'),
+      customAccessory: this.get(STORAGE_KEYS.CUSTOM_ACCESSORY, null),
+      accessoryConfig: accCfg,
+      colorFilter: this.get(STORAGE_KEYS.COLOR_FILTER, 'none'),
+      rpgGestureMode: this.get(STORAGE_KEYS.RPG_GESTURE_MODE, 'true') !== 'false'
     };
   },
 
@@ -209,7 +324,18 @@ const state = {
   selectedScreenTab: 'screen',
   // Rolagem de Dados de RPG & Controles de Mestre
   gmDiceSoundMuted: false,
-  diceBlockedForAll: false
+  diceBlockedForAll: false,
+  // Filtros, Cenários de RPG & Avatar Reativo (PNGTuber)
+  customAvatar: savedPrefs.customAvatar,
+  pngtuberBounce: savedPrefs.pngtuberBounce,
+  pngtuberGlow: savedPrefs.pngtuberGlow,
+  bgPreset: savedPrefs.bgPreset,
+  customBg: savedPrefs.customBg,
+  selectedAccessory: savedPrefs.selectedAccessory,
+  customAccessory: savedPrefs.customAccessory,
+  accessoryConfig: savedPrefs.accessoryConfig,
+  colorFilter: savedPrefs.colorFilter,
+  rpgGestureMode: savedPrefs.rpgGestureMode
 };
 
 // ============================================================================
@@ -473,6 +599,7 @@ async function initApp() {
     setupLayoutSelector();
     setupKeyboardShortcuts();
     applyGridLayout(state.currentLayout);
+    applyFiltersAndAvatarVisuals();
     const lobbyEl = document.getElementById('lobby-screen');
     if (lobbyEl) lobbyEl.scrollTop = 0;
   } catch (e) {
@@ -1049,9 +1176,15 @@ async function initLobbyPreview(fromUserGesture = false) {
       if (avatarEl) avatarEl.style.display = 'none';
       videoEl.srcObject = lobbyStream;
       videoEl.play().catch(() => {});
+
+      const lobbyCanvas = document.getElementById('lobby-preview-canvas');
+      const lobbyAcc = document.getElementById('lobby-preview-accessory');
+      const lobbyAtmo = document.getElementById('lobby-atmosphere-overlay');
+      videoEffects.startPipeline('lobby', videoEl, lobbyCanvas, lobbyAcc, lobbyAtmo);
     } else {
       videoEl.style.display = 'none';
       if (avatarEl) avatarEl.style.display = 'flex';
+      videoEffects.stopPipeline('lobby');
     }
   }
 
@@ -1081,10 +1214,24 @@ async function initLobbyPreview(fromUserGesture = false) {
           if (fillEl) fillEl.style.width = pct + '%';
 
           if (previewBox) {
+            const pImg = document.getElementById('lobby-preview-custom-img');
+            const pAcc = document.getElementById('lobby-preview-accessory');
+            const pAv = document.getElementById('lobby-preview-avatar');
+
             if (avg > 15) {
               previewBox.classList.add('speaking');
+              if (state.pngtuberBounce) {
+                pImg?.classList.add('bounce-active');
+                pAcc?.classList.add('bounce-active');
+              }
+              if (state.pngtuberGlow) {
+                pAv?.classList.add('glow-active');
+              }
             } else {
               previewBox.classList.remove('speaking');
+              pImg?.classList.remove('bounce-active');
+              pAcc?.classList.remove('bounce-active');
+              pAv?.classList.remove('glow-active');
             }
           }
         }, 80);
@@ -1093,6 +1240,8 @@ async function initLobbyPreview(fromUserGesture = false) {
       console.warn('[Lobby] Aviso no medidor de áudio:', audioCtxErr);
     }
   }
+
+  applyFiltersAndAvatarVisuals();
 }
 
 // ============================================================================
@@ -1183,10 +1332,15 @@ async function enumerateDevices() {
 // INÍCIO E GERENCIAMENTO DA CHAMADA
 // ============================================================================
 async function startCall(roomId) {
-  // Encerra stream prévia do lobby para liberar o hardware
+  // Encerra pipeline e stream prévia do lobby para liberar o hardware e modelos
+  videoEffects.stopPipeline('lobby');
   if (lobbyStream) {
     lobbyStream.getTracks().forEach(t => t.stop());
     lobbyStream = null;
+  }
+  const lobbyVideo = document.getElementById('lobby-preview-video');
+  if (lobbyVideo) {
+    lobbyVideo.srcObject = null;
   }
   if (lobbyAudioInterval) {
     clearInterval(lobbyAudioInterval);
@@ -1218,6 +1372,8 @@ async function startCall(roomId) {
   state.webrtc = new TavernWebRTC({
     name: state.userName,
     role: state.userRole,
+    classIcon: state.userClassIcon || '⚔️',
+    customAvatar: state.customAvatar || null,
     audioDeviceId: state.selectedAudioDeviceId,
     videoDeviceId: state.selectedVideoDeviceId,
     noiseSuppressionMode: state.noiseSuppressionMode,
@@ -1227,10 +1383,17 @@ async function startCall(roomId) {
       showNoAudioWarning(warningMsg);
     },
 
-    onLocalStreamReady: (stream) => {
+    onLocalStreamReady: (stream, rawStream) => {
       const localVideo = document.getElementById('local-video');
-      localVideo.srcObject = stream;
-      localVideo.play().catch(() => {});
+      // CRÍTICO: localVideo deve SEMPRE reproduzir a faixa da webcam física (rawStream),
+      // e NUNCA a faixa capturada do canvas com efeitos, para evitar loop infinito de zoom/espelho!
+      const streamToPlay = rawStream || (state.webrtc ? state.webrtc.getRawVideoStream() : stream);
+      if (localVideo && streamToPlay) {
+        if (localVideo.srcObject !== streamToPlay) {
+          localVideo.srcObject = streamToPlay;
+        }
+        localVideo.play().catch(() => {});
+      }
       updateAvatarVisuals();
     },
 
@@ -1294,6 +1457,7 @@ async function startCall(roomId) {
             localTile.classList.remove('speaking');
           }
         }
+        triggerSpeechVisuals(isSpeaking);
       } else {
         const peerTile = document.getElementById(`tile-${targetId}`);
         if (peerTile) {
@@ -1396,6 +1560,12 @@ async function startCall(roomId) {
 }
 
 function leaveCall() {
+  videoEffects.stopPipeline('local');
+  const localVideo = document.getElementById('local-video');
+  if (localVideo) {
+    localVideo.srcObject = null;
+  }
+
   if (state.webrtc) {
     state.webrtc.leaveRoom();
     state.webrtc = null;
@@ -1468,9 +1638,12 @@ function addOrUpdatePeerTile(peerId, peerInfo, stream) {
     tile.innerHTML = `
       <video autoplay playsinline muted></video>
       <audio autoplay playsinline id="audio-${peerId}"></audio>
-      <div class="avatar-fallback ${peerInfo.role === 'mestre' ? 'mestre' : ''}" id="avatar-${peerId}" style="display: none;">
-        <span class="avatar-class-icon" style="font-size: 32px; margin-bottom: 6px;">${peerInfo.classIcon || '⚔️'}</span>
-        <span class="avatar-name" style="font-size: 13px; font-weight: 600; color: var(--text-bright); text-align: center; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(peerInfo.name || 'Aventureiro')}</span>
+      <div class="avatar-fallback ${peerInfo.role === 'mestre' ? 'mestre' : ''} ${peerInfo.customAvatar ? 'has-custom-img' : ''}" id="avatar-${peerId}" style="display: none;">
+        <img class="avatar-pngtuber-img" id="avatar-img-${peerId}" src="${peerInfo.customAvatar || ''}" alt="Avatar" style="display: ${peerInfo.customAvatar ? 'block' : 'none'};" />
+        <div id="avatar-icon-wrap-${peerId}" style="display: ${peerInfo.customAvatar ? 'none' : 'flex'}; flex-direction: column; align-items: center; justify-content: center;">
+          <span class="avatar-class-icon" style="font-size: 32px; margin-bottom: 6px;">${peerInfo.classIcon || '⚔️'}</span>
+          <span class="avatar-name" style="font-size: 13px; font-weight: 600; color: var(--text-bright); text-align: center; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(peerInfo.name || 'Aventureiro')}</span>
+        </div>
       </div>
       <div class="tile-overlay">
         <div class="tile-participant-info">
@@ -1980,7 +2153,8 @@ function updatePeerMetadata(peerId, peerInfo) {
       cached.audioMuted === peerInfo.audioMuted &&
       cached.videoOff === peerInfo.videoOff &&
       cached.isSpeaking === peerInfo.isSpeaking &&
-      cached.isScreenSharing === peerInfo.isScreenSharing) {
+      cached.isScreenSharing === peerInfo.isScreenSharing &&
+      cached.customAvatar === peerInfo.customAvatar) {
     return;
   }
 
@@ -1989,7 +2163,8 @@ function updatePeerMetadata(peerId, peerInfo) {
     audioMuted: peerInfo.audioMuted,
     videoOff: peerInfo.videoOff,
     isSpeaking: peerInfo.isSpeaking,
-    isScreenSharing: peerInfo.isScreenSharing
+    isScreenSharing: peerInfo.isScreenSharing,
+    customAvatar: peerInfo.customAvatar
   });
 
   const nameEl = document.getElementById(`name-${peerId}`);
@@ -1997,6 +2172,25 @@ function updatePeerMetadata(peerId, peerInfo) {
   const videoIcon = document.getElementById(`icon-video-${peerId}`);
   const avatarEl = document.getElementById(`avatar-${peerId}`);
   const tile = document.getElementById(`tile-${peerId}`);
+
+  if (avatarEl && (!cached || cached.customAvatar !== peerInfo.customAvatar)) {
+    const avatarImg = document.getElementById(`avatar-img-${peerId}`);
+    const iconWrap = document.getElementById(`avatar-icon-wrap-${peerId}`);
+    if (peerInfo.customAvatar) {
+      avatarEl.classList.add('has-custom-img');
+      if (avatarImg) {
+        avatarImg.src = peerInfo.customAvatar;
+        avatarImg.style.display = 'block';
+      }
+      if (iconWrap) iconWrap.style.display = 'none';
+    } else {
+      avatarEl.classList.remove('has-custom-img');
+      if (avatarImg) {
+        avatarImg.style.display = 'none';
+      }
+      if (iconWrap) iconWrap.style.display = 'flex';
+    }
+  }
 
   if (nameEl && (!cached || cached.name !== peerInfo.name)) {
     nameEl.textContent = peerInfo.name;
@@ -2511,35 +2705,334 @@ function showUpdateBanner(info) {
   }
 }
 
+// ============================================================================
+// TEMPLATES VETORIAIS DE ACESSÓRIOS & ADEREÇOS DE RPG
+// ============================================================================
+const ACCESSORY_TEMPLATES = {
+  crown: `<svg viewBox="0 0 100 70" width="100%" height="100%"><defs><linearGradient id="accCrownGold" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#fef08a"/><stop offset="100%" stop-color="#d97706"/></linearGradient></defs><path d="M10 55 L20 18 L40 38 L50 12 L60 38 L80 18 L90 55 Z" fill="url(#accCrownGold)" stroke="#b45309" stroke-width="2.5"/><rect x="8" y="55" width="84" height="12" rx="3" fill="#f59e0b" stroke="#92400e" stroke-width="2"/><circle cx="50" cy="12" r="4.5" fill="#ef4444" stroke="#991b1b"/><circle cx="20" cy="18" r="4" fill="#3b82f6" stroke="#1d4ed8"/><circle cx="80" cy="18" r="4" fill="#3b82f6" stroke="#1d4ed8"/><circle cx="50" cy="61" r="3.5" fill="#10b981"/><circle cx="28" cy="61" r="3" fill="#ec4899"/><circle cx="72" cy="61" r="3" fill="#ec4899"/></svg>`,
+
+  wizard: `<svg viewBox="0 0 100 90" width="100%" height="100%"><defs><linearGradient id="accWizGrad" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#6366f1"/><stop offset="100%" stop-color="#1e1b4b"/></linearGradient></defs><ellipse cx="50" cy="74" rx="46" ry="12" fill="#312e81" stroke="#1e1b4b" stroke-width="2"/><path d="M22 72 Q36 40 46 15 Q52 8 64 6 Q54 18 52 35 Q50 55 78 72 Z" fill="url(#accWizGrad)" stroke="#1e1b4b" stroke-width="2"/><path d="M22 71 Q50 64 78 71 Q50 78 22 71 Z" fill="#f59e0b" stroke="#b45309" stroke-width="1.5"/><polygon points="46,65 52,65 54,72 44,72" fill="#fbbf24"/><polygon points="58,26 60,30 65,30 61,33 63,37 58,34 54,37 56,33 52,30 57,30" fill="#fde047"/></svg>`,
+
+  helm: `<svg viewBox="0 0 100 85" width="100%" height="100%"><defs><linearGradient id="accMetalGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#e2e8f0"/><stop offset="50%" stop-color="#64748b"/><stop offset="100%" stop-color="#1e293b"/></linearGradient></defs><path d="M20 70 C15 35 30 10 50 10 C70 10 85 35 80 70 Z" fill="url(#accMetalGrad)" stroke="#0f172a" stroke-width="2.5"/><rect x="25" y="42" width="50" height="7" rx="3.5" fill="#0f172a"/><path d="M50 10 L50 35 M36 55 L36 68 M64 55 L64 68" stroke="#334155" stroke-width="2"/><path d="M50 8 C44 -2 56 -2 50 8" stroke="#ef4444" stroke-width="7" stroke-linecap="round"/></svg>`,
+
+  horns: `<svg viewBox="0 0 100 55" width="100%" height="100%"><defs><linearGradient id="accHornGrad" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="#18181b"/><stop offset="60%" stop-color="#991b1b"/><stop offset="100%" stop-color="#f87171"/></linearGradient></defs><path d="M30 45 C15 38 4 20 10 5 C16 18 24 30 38 38 Z" fill="url(#accHornGrad)" stroke="#450a0a" stroke-width="2"/><path d="M70 45 C85 38 96 20 90 5 C84 18 76 30 62 38 Z" fill="url(#accHornGrad)" stroke="#450a0a" stroke-width="2"/></svg>`,
+
+  eyepatch: `<svg viewBox="0 0 100 45" width="100%" height="100%"><line x1="8" y1="12" x2="92" y2="30" stroke="#1c1917" stroke-width="3"/><path d="M34 18 C28 22 28 36 42 38 C54 39 58 26 52 20 Z" fill="#1c1917" stroke="#44403c" stroke-width="2"/><circle cx="42" cy="28" r="3" fill="#a8a29e"/></svg>`,
+
+  elf: `<svg viewBox="0 0 100 40" width="100%" height="100%"><path d="M24 28 C14 24 2 12 0 4 C10 14 18 18 26 20 Z" fill="#fbcfe8" stroke="#f472b6" stroke-width="1.5"/><path d="M76 28 C86 24 98 12 100 4 C90 14 82 18 74 20 Z" fill="#fbcfe8" stroke="#f472b6" stroke-width="1.5"/></svg>`,
+
+  eyes: `<svg viewBox="0 0 100 30" width="100%" height="100%"><circle cx="34" cy="15" r="8" fill="#38bdf8" filter="drop-shadow(0 0 8px #0284c7)"/><circle cx="34" cy="15" r="3" fill="#ffffff"/><circle cx="66" cy="15" r="8" fill="#38bdf8" filter="drop-shadow(0 0 8px #0284c7)"/><circle cx="66" cy="15" r="3" fill="#ffffff"/></svg>`,
+
+  mask: `<svg viewBox="0 0 100 55" width="100%" height="100%"><path d="M15 15 C35 18 65 18 85 15 C82 38 68 50 50 52 C32 50 18 38 15 15 Z" fill="#1e293b" stroke="#0f172a" stroke-width="2.5"/><line x1="12" y1="16" x2="88" y2="16" stroke="#475569" stroke-width="1.5"/></svg>`,
+
+  beard: `<svg viewBox="0 0 100 70" width="100%" height="100%"><defs><linearGradient id="accBeardGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#b45309"/><stop offset="100%" stop-color="#78350f"/></linearGradient></defs><path d="M22 10 C32 16 68 16 78 10 C82 30 76 52 50 68 C24 52 18 30 22 10 Z" fill="url(#accBeardGrad)" stroke="#451a03" stroke-width="2"/><rect x="44" y="52" width="12" height="6" rx="2" fill="#f59e0b"/></svg>`,
+
+  wings: `<svg viewBox="0 0 120 60" width="100%" height="100%"><path d="M42 35 C28 20 12 10 0 14 C4 24 16 38 38 42 Z" fill="#a78bfa" opacity="0.85" filter="drop-shadow(0 0 6px #7c3aed)"/><path d="M78 35 C92 20 108 10 120 14 C116 24 104 38 82 42 Z" fill="#a78bfa" opacity="0.85" filter="drop-shadow(0 0 6px #7c3aed)"/></svg>`,
+
+  pet: `<svg viewBox="0 0 60 60" width="100%" height="100%"><path d="M15 48 C10 35 15 22 28 18 C38 15 45 22 42 32 C38 42 25 45 15 48 Z" fill="#10b981" stroke="#047857" stroke-width="2"/><circle cx="35" cy="22" r="3" fill="#f59e0b"/><circle cx="36" cy="22" r="1.5" fill="#000"/><path d="M22 18 L18 8 L26 14 Z" fill="#ef4444"/><path d="M38 32 C48 28 55 35 52 44 Z" fill="#059669"/></svg>`
+};
+
+const ANCHOR_DEFAULTS = {
+  head: { y: -35, x: 0, scale: 100 },
+  eyes: { y: -8, x: 0, scale: 90 },
+  mouth: { y: 20, x: 0, scale: 95 },
+  chest: { y: 45, x: 0, scale: 110 },
+  side: { y: 15, x: 38, scale: 80 }
+};
+
+// Posições geométricas calibradas para ancoragem precisa sobre o Avatar de Personagem (PNGTuber)
+const AVATAR_ANCHOR_POSITIONS = {
+  head: { x: 50, y: 16, scale: 1.0 },
+  eyes: { x: 50, y: 38, scale: 0.9 },
+  mouth: { x: 50, y: 56, scale: 0.95 },
+  chest: { x: 50, y: 80, scale: 1.15 },
+  side: { x: 80, y: 35, scale: 0.85 }
+};
+
+function triggerSpeechVisuals(isSpeaking) {
+  const localImg = document.getElementById('local-avatar-custom-img');
+  const localAcc = document.getElementById('local-tile-accessory');
+  const localFallback = document.getElementById('local-avatar-fallback');
+
+  if (isSpeaking) {
+    if (state.pngtuberBounce) {
+      localImg?.classList.add('bounce-active');
+      localAcc?.classList.add('bounce-active');
+    }
+    if (state.pngtuberGlow) {
+      localFallback?.classList.add('glow-active');
+    }
+  } else {
+    localImg?.classList.remove('bounce-active');
+    localAcc?.classList.remove('bounce-active');
+    localFallback?.classList.remove('glow-active');
+  }
+}
+
+function applyFiltersAndAvatarVisuals() {
+  const customImg = state.customAvatar;
+
+  const customBgUrl = state.customBg || (customBackgroundsMap.get(state.bgPreset)?.url) || null;
+  const customAccUrl = state.customAccessory || (customAccessoriesMap.get(state.selectedAccessory)?.url) || null;
+
+  // 1. Atualiza configuração no processador de vídeo com IA
+  videoEffects.updateConfig({
+    bgPreset: state.bgPreset,
+    customBg: customBgUrl,
+    selectedAccessory: state.selectedAccessory,
+    customAccessory: customAccUrl,
+    accessoryConfig: state.accessoryConfig,
+    colorFilter: state.colorFilter,
+    isVideoOff: state.isVideoOff,
+    rpgGestureMode: state.rpgGestureMode !== false
+  });
+
+  // Sincroniza faixa de vídeo com efeitos/desfoque para outros participantes da chamada WebRTC
+  if (state.webrtc && !state.isVideoOff) {
+    const hasEffect = state.bgPreset !== 'none' || (state.colorFilter && state.colorFilter !== 'none');
+    if (hasEffect) {
+      setTimeout(() => {
+        const processedTrack = videoEffects.getProcessedTrack('local');
+        if (processedTrack) state.webrtc.updateFilteredVideoTrack(processedTrack);
+      }, 50);
+    } else if (state.webrtc.rawVideoTrack) {
+      state.webrtc.updateFilteredVideoTrack(state.webrtc.rawVideoTrack);
+    }
+  }
+
+  // 2. Avatar Visuals (Configurações, Lobby, Chamada Ativa)
+  const settingsPreviewImg = document.getElementById('pngtuber-preview-img');
+  const settingsPlaceholder = document.getElementById('pngtuber-placeholder');
+  const settingsBox = document.getElementById('pngtuber-preview-container');
+  const lobbyPreviewImg = document.getElementById('lobby-preview-custom-img');
+  const lobbyAvatarLetter = document.getElementById('lobby-avatar-letter');
+  const lobbyAvatarBox = document.getElementById('lobby-preview-avatar');
+  const localAvatarImg = document.getElementById('local-avatar-custom-img');
+  const localAvatarIconWrap = document.getElementById('local-avatar-icon-wrap');
+  const localAvatarFallback = document.getElementById('local-avatar-fallback');
+  const filtersAvatarFallback = document.getElementById('filters-preview-avatar-fallback');
+  const filtersAvatarImg = document.getElementById('filters-preview-avatar-img');
+  const filtersPlaceholder = document.getElementById('filters-preview-placeholder');
+
+  if (customImg) {
+    if (settingsPreviewImg) { settingsPreviewImg.src = customImg; settingsPreviewImg.style.display = 'block'; }
+    if (settingsPlaceholder) settingsPlaceholder.style.display = 'none';
+    if (settingsBox) settingsBox.classList.add('has-custom-img');
+
+    if (lobbyPreviewImg) { lobbyPreviewImg.src = customImg; lobbyPreviewImg.style.display = 'block'; }
+    if (lobbyAvatarLetter) lobbyAvatarLetter.style.display = 'none';
+    if (lobbyAvatarBox) lobbyAvatarBox.classList.add('has-custom-img');
+
+    if (localAvatarImg) { localAvatarImg.src = customImg; localAvatarImg.style.display = 'block'; }
+    if (localAvatarIconWrap) localAvatarIconWrap.style.display = 'none';
+    if (localAvatarFallback) localAvatarFallback.classList.add('has-custom-img');
+
+    if (filtersAvatarImg) { filtersAvatarImg.src = customImg; filtersAvatarImg.style.display = 'block'; }
+    if (filtersAvatarFallback) {
+      filtersAvatarFallback.classList.add('has-custom-img');
+      const pVid = document.getElementById('filters-preview-video');
+      const isCamRunning = pVid && pVid.srcObject && pVid.style.display !== 'none';
+      if (!isCamRunning) {
+        filtersAvatarFallback.style.display = 'flex';
+        if (filtersPlaceholder) filtersPlaceholder.style.display = 'none';
+      }
+    }
+  } else {
+    if (settingsPreviewImg) { settingsPreviewImg.src = ''; settingsPreviewImg.style.display = 'none'; }
+    if (settingsPlaceholder) { settingsPlaceholder.style.display = 'block'; settingsPlaceholder.textContent = state.userClassIcon || '⚔️'; }
+    if (settingsBox) settingsBox.classList.remove('has-custom-img');
+
+    if (lobbyPreviewImg) { lobbyPreviewImg.src = ''; lobbyPreviewImg.style.display = 'none'; }
+    if (lobbyAvatarLetter) lobbyAvatarLetter.style.display = 'block';
+    if (lobbyAvatarBox) lobbyAvatarBox.classList.remove('has-custom-img');
+
+    if (localAvatarImg) { localAvatarImg.src = ''; localAvatarImg.style.display = 'none'; }
+    if (localAvatarIconWrap) localAvatarIconWrap.style.display = 'flex';
+    if (localAvatarFallback) localAvatarFallback.classList.remove('has-custom-img');
+
+    if (filtersAvatarImg) { filtersAvatarImg.src = ''; filtersAvatarImg.style.display = 'none'; }
+    if (filtersAvatarFallback) {
+      filtersAvatarFallback.classList.remove('has-custom-img');
+      filtersAvatarFallback.style.display = 'none';
+      const pVid = document.getElementById('filters-preview-video');
+      const isCamRunning = pVid && pVid.srcObject && pVid.style.display !== 'none';
+      if (!isCamRunning && filtersPlaceholder) {
+        filtersPlaceholder.style.display = 'flex';
+      }
+    }
+  }
+
+  // 3. Cenários de Fundo (Temas de RPG aplicados ao container no modo Avatar)
+  const themeClasses = ['bg-tavern-theme', 'bg-dungeon-theme', 'bg-forest-theme', 'bg-library-theme', 'bg-blur-theme'];
+  const lobbyBox = document.getElementById('lobby-preview-box');
+  const localTile = document.getElementById('tile-local');
+  const filtersBox = document.getElementById('filters-camera-preview-container');
+
+  [lobbyBox, localTile, filtersBox].forEach(container => {
+    if (!container) return;
+    themeClasses.forEach(c => container.classList.remove(c));
+    container.style.backgroundImage = '';
+    container.style.backgroundSize = '';
+    container.style.backgroundPosition = '';
+
+    if (state.bgPreset === 'blur') {
+      container.classList.add('bg-blur-theme');
+    } else if (state.bgPreset === 'tavern') {
+      container.classList.add('bg-tavern-theme');
+    } else if (state.bgPreset === 'dungeon') {
+      container.classList.add('bg-dungeon-theme');
+    } else if (state.bgPreset === 'forest') {
+      container.classList.add('bg-forest-theme');
+    } else if (state.bgPreset === 'library') {
+      container.classList.add('bg-library-theme');
+    } else if (state.bgPreset === 'custom' && state.customBg) {
+      container.style.backgroundImage = `url("${state.customBg}")`;
+      container.style.backgroundSize = 'cover';
+      container.style.backgroundPosition = 'center';
+    } else if (customBgUrl) {
+      container.style.backgroundImage = `url("${customBgUrl}")`;
+      container.style.backgroundSize = 'cover';
+      container.style.backgroundPosition = 'center';
+    }
+  });
+
+  // 4. Acessório Equipado (HTML e posicionamento em prévias de avatar)
+  const accType = state.selectedAccessory;
+  const accCfg = state.accessoryConfig || { scale: 100, x: 0, y: -35, anchor: 'head' };
+  let accHtml = '';
+
+  if (accType === 'custom' && state.customAccessory) {
+    accHtml = `<img src="${state.customAccessory}" alt="Acessório" style="width:100%;height:100%;object-fit:contain;" />`;
+  } else if (customAccUrl) {
+    accHtml = `<img src="${customAccUrl}" alt="Acessório" style="width:100%;height:100%;object-fit:contain;" />`;
+  } else if (accType && ACCESSORY_TEMPLATES[accType]) {
+    accHtml = ACCESSORY_TEMPLATES[accType];
+  }
+
+  // Prévia do Avatar nas Configurações (Sempre ancorado geometricamente)
+  const settingsAcc = document.getElementById('pngtuber-preview-accessory');
+  if (settingsAcc) {
+    if (!accHtml || accType === 'none') {
+      settingsAcc.classList.add('hidden');
+      settingsAcc.innerHTML = '';
+    } else {
+      settingsAcc.classList.remove('hidden');
+      settingsAcc.innerHTML = accHtml;
+      const anchorKey = accCfg.anchor || 'head';
+      const base = AVATAR_ANCHOR_POSITIONS[anchorKey] || AVATAR_ANCHOR_POSITIONS.head;
+      const offX = accCfg.x || 0;
+      const offY = ((accCfg.y !== undefined ? accCfg.y : -35) + 35);
+      settingsAcc.style.left = `${base.x + offX}%`;
+      settingsAcc.style.top = `${base.y + offY}%`;
+      settingsAcc.style.transform = `translate(-50%, -50%) scale(${base.scale * (accCfg.scale / 100)})`;
+    }
+  }
+
+  // Overlays na tela do Lobby e da Chamada
+  const liveOverlays = [
+    document.getElementById('lobby-preview-accessory'),
+    document.getElementById('local-tile-accessory')
+  ];
+
+  liveOverlays.forEach(overlay => {
+    if (!overlay) return;
+    if (!accHtml || accType === 'none') {
+      overlay.classList.add('hidden');
+      overlay.innerHTML = '';
+    } else {
+      overlay.innerHTML = accHtml;
+      // Se a câmera estiver desligada (Avatar PNGTuber), ancora diretamente no avatar
+      if (state.isVideoOff) {
+        overlay.classList.remove('hidden');
+        const anchorKey = accCfg.anchor || 'head';
+        const base = AVATAR_ANCHOR_POSITIONS[anchorKey] || AVATAR_ANCHOR_POSITIONS.head;
+        const offX = accCfg.x || 0;
+        const offY = ((accCfg.y !== undefined ? accCfg.y : -35) + 35);
+        overlay.style.left = `${base.x + offX}%`;
+        overlay.style.top = `${base.y + offY}%`;
+        overlay.style.transform = `translate(-50%, -50%) scale(${base.scale * (accCfg.scale / 100)})`;
+      }
+    }
+  });
+
+  // 5. Camadas Atmosféricas de Iluminação e Clima (Sem alterar o tom natural da pele)
+  const atmoOverlays = [
+    document.getElementById('lobby-atmosphere-overlay'),
+    document.getElementById('local-atmosphere-overlay')
+  ];
+  atmoOverlays.forEach(ao => {
+    if (!ao) return;
+    ao.className = 'atmosphere-overlay';
+    if (state.colorFilter && state.colorFilter !== 'none') {
+      ao.classList.add(`filter-${state.colorFilter}`);
+      ao.classList.remove('hidden');
+    } else {
+      ao.classList.add('hidden');
+    }
+  });
+
+  const filterClasses = ['filter-campfire', 'filter-dungeon-shadow', 'filter-parchment', 'filter-arcane-night'];
+  const lobbyVideo = document.getElementById('lobby-preview-video');
+  const localVideo = document.getElementById('local-video');
+
+  [lobbyVideo, localVideo].forEach(v => {
+    if (!v) return;
+    filterClasses.forEach(c => v.classList.remove(c));
+    if (state.colorFilter && state.colorFilter !== 'none') {
+      v.classList.add(`filter-${state.colorFilter}`);
+    }
+  });
+}
+
 function updateAvatarVisuals() {
   const initial = (state.userName || 'A')[0].toUpperCase();
-  document.getElementById('local-avatar-letter').textContent = initial;
-  document.getElementById('local-class-icon').textContent = state.userClassIcon;
-  document.getElementById('local-tile-name').textContent = `Você (${state.userName})`;
+  const letterEl = document.getElementById('local-avatar-letter');
+  if (letterEl) letterEl.textContent = initial;
+  const classIconEl = document.getElementById('local-class-icon');
+  if (classIconEl) classIconEl.textContent = state.userClassIcon;
+  const tileNameEl = document.getElementById('local-tile-name');
+  if (tileNameEl) tileNameEl.textContent = `Você (${state.userName})`;
 
   const badge = document.getElementById('local-tile-badge');
-  badge.textContent = state.userRole === 'mestre' ? 'Mestre' : 'Jogador';
-  badge.className = `badge-role ${state.userRole === 'mestre' ? 'mestre' : 'jogador'}`;
+  if (badge) {
+    badge.textContent = state.userRole === 'mestre' ? 'Mestre' : 'Jogador';
+    badge.className = `badge-role ${state.userRole === 'mestre' ? 'mestre' : 'jogador'}`;
+  }
 
   const localAvatar = document.getElementById('local-avatar-fallback');
   const localVideo = document.getElementById('local-video');
+  const localCanvas = document.getElementById('local-video-canvas');
+  const localAcc = document.getElementById('local-tile-accessory');
+  const localAtmo = document.getElementById('local-atmosphere-overlay');
 
   if (state.isVideoOff) {
-    localAvatar.style.display = 'flex';
-    localVideo.style.display = 'none';
-    document.getElementById('local-icon-video').classList.add('muted');
+    if (localAvatar) localAvatar.style.display = 'flex';
+    if (localVideo) localVideo.style.display = 'none';
+    if (localCanvas) localCanvas.classList.add('hidden');
+    videoEffects.stopPipeline('local');
+    document.getElementById('local-icon-video')?.classList.add('muted');
   } else {
-    localAvatar.style.display = 'none';
-    localVideo.style.display = 'block';
-    localVideo.play().catch(() => {});
-    document.getElementById('local-icon-video').classList.remove('muted');
+    if (localAvatar) localAvatar.style.display = 'none';
+    if (localVideo) {
+      if (state.webrtc) {
+        const rawStream = state.webrtc.getRawVideoStream();
+        if (rawStream && localVideo.srcObject !== rawStream) {
+          localVideo.srcObject = rawStream;
+        }
+      }
+      localVideo.play().catch(() => {});
+      videoEffects.startPipeline('local', localVideo, localCanvas, localAcc, localAtmo);
+    }
+    document.getElementById('local-icon-video')?.classList.remove('muted');
   }
 
   if (state.isAudioMuted) {
-    document.getElementById('local-icon-audio').classList.add('muted');
+    document.getElementById('local-icon-audio')?.classList.add('muted');
   } else {
-    document.getElementById('local-icon-audio').classList.remove('muted');
+    document.getElementById('local-icon-audio')?.classList.remove('muted');
   }
+
+  applyFiltersAndAvatarVisuals();
 }
 
 // ============================================================================
@@ -3048,6 +3541,22 @@ function setupCallControls() {
   document.getElementById('btn-control-settings').onclick = () => openSettingsModal('tab-devices');
   document.getElementById('btn-mic-arrow').onclick = () => openSettingsModal('tab-devices');
   document.getElementById('btn-cam-arrow').onclick = () => openSettingsModal('tab-devices');
+
+  const btnOpenFilters = document.getElementById('btn-open-filters');
+  if (btnOpenFilters) {
+    btnOpenFilters.onclick = (e) => {
+      e.stopPropagation();
+      openSettingsModal('tab-filters');
+    };
+  }
+
+  const btnLobbyFilters = document.getElementById('btn-lobby-filters');
+  if (btnLobbyFilters) {
+    btnLobbyFilters.onclick = (e) => {
+      e.stopPropagation();
+      openSettingsModal('tab-filters');
+    };
+  }
 }
 
 // ============================================================================
@@ -3330,6 +3839,16 @@ function setupSettingsModal() {
       tabPanes.forEach(p => p.classList.remove('active'));
       nav.classList.add('active');
       document.getElementById(tabId).classList.add('active');
+
+      if (tabId !== 'tab-filters' && typeof window.__stopSettingsCamPreview === 'function') {
+        window.__stopSettingsCamPreview();
+      } else if (tabId === 'tab-filters') {
+        const hasActiveCam = (lobbyStream && lobbyStream.getVideoTracks().some(t => t.readyState === 'live')) ||
+                             (state.webrtc && !state.isVideoOff);
+        if (hasActiveCam && typeof window.__startSettingsCamPreview === 'function') {
+          setTimeout(() => window.__startSettingsCamPreview(), 80);
+        }
+      }
     });
   });
 
@@ -3521,8 +4040,777 @@ function setupSettingsModal() {
     };
   });
 
+  // Configuração da aba de Filtros, Cenários e Avatar
+  setupFilterAndAvatarSettings(modal);
+
   // Configuração da aba de Versão e Atualizações
   setupVersionSettingsTab(modal);
+}
+
+// ============================================================================
+// CONFIGURAÇÃO DA ABA DE FILTROS, CENÁRIOS E AVATAR
+// ============================================================================
+function setupFilterAndAvatarSettings(modal) {
+  if (!modal) return;
+  applyFiltersAndAvatarVisuals();
+
+  // --- SEÇÃO 0: PRÉVIA DA CÂMERA EM TEMPO REAL NO MENU ---
+  const btnToggleCam = document.getElementById('btn-toggle-filters-cam');
+  const btnToggleCamText = document.getElementById('btn-toggle-filters-cam-text');
+  const camBadge = document.getElementById('filters-cam-status-badge');
+  const camPlaceholder = document.getElementById('filters-preview-placeholder');
+  const previewVideo = document.getElementById('filters-preview-video');
+  const previewCanvas = document.getElementById('filters-preview-canvas');
+  const previewAcc = document.getElementById('filters-preview-accessory');
+  const previewAtmo = document.getElementById('filters-atmosphere-overlay');
+  let settingsPreviewStream = null;
+  let isSettingsCamOn = false;
+
+  async function startSettingsCamPreview() {
+    try {
+      // 1. Tenta reaproveitar stream existente (WebRTC ou Lobby)
+      let streamToUse = null;
+      if (state.webrtc && state.webrtc.localStream) {
+        const vTrack = state.webrtc.localStream.getVideoTracks().find(t => t.readyState === 'live');
+        if (vTrack && vTrack.enabled) {
+          streamToUse = new MediaStream([vTrack]);
+        }
+      }
+      if (!streamToUse && lobbyStream) {
+        const lTrack = lobbyStream.getVideoTracks().find(t => t.readyState === 'live');
+        if (lTrack && lTrack.enabled) {
+          streamToUse = new MediaStream([lTrack]);
+        }
+      }
+
+      // 2. Se não houver câmera já ligada, solicita permissão para a prévia do menu
+      if (!streamToUse) {
+        settingsPreviewStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+          audio: false
+        });
+        streamToUse = settingsPreviewStream;
+      }
+
+      if (previewVideo && streamToUse) {
+        previewVideo.srcObject = streamToUse;
+        previewVideo.style.display = 'block';
+        await previewVideo.play().catch(() => {});
+        if (camPlaceholder) camPlaceholder.style.display = 'none';
+        const filtersAvatar = document.getElementById('filters-preview-avatar-fallback');
+        if (filtersAvatar) filtersAvatar.style.display = 'none';
+
+        videoEffects.startPipeline('settings', previewVideo, previewCanvas, previewAcc, previewAtmo);
+
+        isSettingsCamOn = true;
+        if (btnToggleCamText) btnToggleCamText.textContent = '⏹️ Desligar Câmera';
+        btnToggleCam?.classList.add('active-danger');
+        if (camBadge) {
+          camBadge.textContent = '🟢 Câmera Ativa';
+          camBadge.style.color = 'var(--accent-green)';
+          camBadge.style.background = 'rgba(35, 165, 90, 0.2)';
+        }
+      }
+    } catch (err) {
+      console.warn('[Filtros] Falha ao iniciar câmera na prévia:', err);
+      showLayoutNotification('⚠️ Não foi possível iniciar a prévia da câmera.');
+    }
+  }
+
+  function stopSettingsCamPreview() {
+    videoEffects.stopPipeline('settings');
+    if (settingsPreviewStream) {
+      settingsPreviewStream.getTracks().forEach(t => t.stop());
+      settingsPreviewStream = null;
+    }
+    if (previewVideo) {
+      previewVideo.pause();
+      previewVideo.srcObject = null;
+      previewVideo.style.display = 'none';
+    }
+    if (previewCanvas) previewCanvas.classList.add('hidden');
+    if (previewAcc) previewAcc.classList.add('hidden');
+    if (previewAtmo) previewAtmo.classList.add('hidden');
+
+    const filtersAvatar = document.getElementById('filters-preview-avatar-fallback');
+    if (state.customAvatar && filtersAvatar) {
+      filtersAvatar.style.display = 'flex';
+      if (camPlaceholder) camPlaceholder.style.display = 'none';
+    } else if (camPlaceholder) {
+      camPlaceholder.style.display = 'flex';
+    }
+
+    isSettingsCamOn = false;
+    if (btnToggleCamText) btnToggleCamText.textContent = '▶️ Ligar Câmera na Prévia';
+    btnToggleCam?.classList.remove('active-danger');
+    if (camBadge) {
+      camBadge.textContent = 'Desativada';
+      camBadge.style.color = 'var(--accent-blurple)';
+      camBadge.style.background = 'rgba(88, 101, 242, 0.15)';
+    }
+  }
+
+  if (btnToggleCam) {
+    btnToggleCam.onclick = (e) => {
+      e.stopPropagation();
+      if (isSettingsCamOn) {
+        stopSettingsCamPreview();
+      } else {
+        startSettingsCamPreview();
+      }
+    };
+  }
+
+  window.__startSettingsCamPreview = startSettingsCamPreview;
+  window.__stopSettingsCamPreview = stopSettingsCamPreview;
+
+  // --- SEÇÃO 1: AVATAR PNGTUBER REATIVO ---
+  const inputUploadAvatar = document.getElementById('input-upload-avatar');
+  const btnRemoveAvatar = document.getElementById('btn-remove-custom-avatar');
+  const checkBounce = document.getElementById('check-pngtuber-bounce');
+  const checkGlow = document.getElementById('check-pngtuber-glow');
+  const btnTestVoice = document.getElementById('btn-test-pngtuber-voice');
+
+  if (checkBounce) {
+    checkBounce.checked = state.pngtuberBounce;
+    checkBounce.onchange = (e) => {
+      state.pngtuberBounce = e.target.checked;
+      StorageService.set(STORAGE_KEYS.PNGTUBER_BOUNCE, state.pngtuberBounce);
+    };
+  }
+
+  if (checkGlow) {
+    checkGlow.checked = state.pngtuberGlow;
+    checkGlow.onchange = (e) => {
+      state.pngtuberGlow = e.target.checked;
+      StorageService.set(STORAGE_KEYS.PNGTUBER_GLOW, state.pngtuberGlow);
+    };
+  }
+
+  if (inputUploadAvatar) {
+    inputUploadAvatar.onchange = (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (file.size > 8 * 1024 * 1024) {
+        alert('Por favor, escolha uma imagem de até 8MB.');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const dataUrl = evt.target.result;
+        state.customAvatar = dataUrl;
+        StorageService.set(STORAGE_KEYS.CUSTOM_AVATAR, dataUrl);
+        if (state.webrtc) {
+          state.webrtc.userInfo.customAvatar = dataUrl;
+          state.webrtc.broadcastMetadata();
+        }
+        applyFiltersAndAvatarVisuals();
+        showLayoutNotification('🎭 Imagem do personagem atualizada com sucesso!');
+      };
+      reader.readAsDataURL(file);
+    };
+  }
+
+  if (btnRemoveAvatar) {
+    btnRemoveAvatar.onclick = (e) => {
+      e.stopPropagation();
+      state.customAvatar = null;
+      try { localStorage.removeItem(STORAGE_KEYS.CUSTOM_AVATAR); } catch (err) {}
+      if (state.webrtc) {
+        state.webrtc.userInfo.customAvatar = null;
+        state.webrtc.broadcastMetadata();
+      }
+      applyFiltersAndAvatarVisuals();
+      showLayoutNotification('Imagem customizada removida. Usando ícone de classe.');
+    };
+  }
+
+  if (btnTestVoice) {
+    let testTimer = null;
+    btnTestVoice.onclick = (e) => {
+      e.stopPropagation();
+      const pContainer = document.getElementById('pngtuber-preview-container');
+      const pImg = document.getElementById('pngtuber-preview-img');
+      const pAcc = document.getElementById('pngtuber-preview-accessory');
+      if (testTimer) clearTimeout(testTimer);
+      if (state.pngtuberGlow) pContainer?.classList.add('glow-active');
+      if (state.pngtuberBounce) {
+        pImg?.classList.add('bounce-active');
+        pAcc?.classList.add('bounce-active');
+      }
+      btnTestVoice.classList.add('active');
+      testTimer = setTimeout(() => {
+        pContainer?.classList.remove('glow-active');
+        pImg?.classList.remove('bounce-active');
+        pAcc?.classList.remove('bounce-active');
+        btnTestVoice.classList.remove('active');
+      }, 1500);
+    };
+  }
+
+  // --- SEÇÃO 2 & 3: CARREGAMENTO DINÂMICO DE CENÁRIOS E ACESSÓRIOS (PASTAS DO PC & VAULT) ---
+  const bgGrid = document.getElementById('background-cards-grid');
+  const accGrid = document.getElementById('accessory-cards-grid');
+  const inputUploadBg = document.getElementById('input-upload-bg');
+  const btnRemoveBg = document.getElementById('btn-remove-custom-bg');
+  const inputUploadAcc = document.getElementById('input-upload-accessory');
+  const btnRemoveAcc = document.getElementById('btn-remove-custom-acc');
+  const customAccCard = document.getElementById('acc-card-custom');
+  const anchorBtns = modal.querySelectorAll('.btn-acc-anchor');
+
+  const btnReloadBgFolder = document.getElementById('btn-reload-backgrounds-folder');
+  const btnReloadAccFolder = document.getElementById('btn-reload-accessories-folder');
+
+  const sliderScale = document.getElementById('slider-acc-scale');
+  const sliderPosY = document.getElementById('slider-acc-posy');
+  const sliderPosX = document.getElementById('slider-acc-posx');
+  const labelScale = document.getElementById('label-acc-scale');
+  const labelPosY = document.getElementById('label-acc-posy');
+  const labelPosX = document.getElementById('label-acc-posx');
+  const btnResetPos = document.getElementById('btn-reset-acc-pos');
+
+  const updateAccSlidersUi = () => {
+    const cfg = state.accessoryConfig || { scale: 100, x: 0, y: -35, anchor: 'head' };
+    if (sliderScale) sliderScale.value = cfg.scale;
+    if (sliderPosY) sliderPosY.value = cfg.y;
+    if (sliderPosX) sliderPosX.value = cfg.x;
+    if (labelScale) labelScale.textContent = `${cfg.scale}%`;
+    if (labelPosY) labelPosY.textContent = `${cfg.y}%`;
+    if (labelPosX) labelPosX.textContent = `${cfg.x}%`;
+
+    anchorBtns.forEach(btn => {
+      if (btn.getAttribute('data-anchor') === cfg.anchor) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+  };
+
+  const setAccessoryAnchor = (anchor, save = true) => {
+    const def = ANCHOR_DEFAULTS[anchor] || ANCHOR_DEFAULTS.head;
+    state.accessoryConfig.anchor = anchor;
+    state.accessoryConfig.scale = def.scale;
+    state.accessoryConfig.y = def.y;
+    state.accessoryConfig.x = def.x;
+
+    updateAccSlidersUi();
+    if (save) {
+      StorageService.set(STORAGE_KEYS.ACCESSORY_CONFIG, JSON.stringify(state.accessoryConfig));
+    }
+    applyFiltersAndAvatarVisuals();
+  };
+
+  anchorBtns.forEach(btn => {
+    btn.onclick = () => {
+      const anchor = btn.getAttribute('data-anchor');
+      setAccessoryAnchor(anchor, true);
+    };
+  });
+
+  const updateBgCardSelection = () => {
+    if (!bgGrid) return;
+    const cards = bgGrid.querySelectorAll('.bg-preset-card');
+    cards.forEach(card => {
+      const bgId = card.getAttribute('data-bg');
+      if (bgId === state.bgPreset) {
+        card.classList.add('active');
+      } else {
+        card.classList.remove('active');
+      }
+    });
+    if (btnRemoveBg) {
+      if (state.bgPreset !== 'none' && state.bgPreset !== 'blur') {
+        btnRemoveBg.classList.remove('hidden');
+      } else {
+        btnRemoveBg.classList.add('hidden');
+      }
+    }
+  };
+
+  const updateAccCardSelection = () => {
+    if (!accGrid) return;
+    const cards = accGrid.querySelectorAll('.acc-card');
+    cards.forEach(card => {
+      const accId = card.getAttribute('data-acc');
+      if (accId === state.selectedAccessory) {
+        card.classList.add('active');
+      } else {
+        card.classList.remove('active');
+      }
+    });
+
+    if (btnRemoveAcc) {
+      if (state.selectedAccessory && state.selectedAccessory !== 'none') {
+        btnRemoveAcc.classList.remove('hidden');
+      } else {
+        btnRemoveAcc.classList.add('hidden');
+      }
+    }
+  };
+
+  async function loadCustomAssets(showToast = false) {
+    try {
+      // 1. Carrega do IndexedDB permanente local (seguro contra resets e atualizações)
+      const vaultBgs = await RPGAssetVault.getAll('backgrounds');
+      vaultBgs.forEach(b => {
+        customBackgroundsMap.set(b.id, b);
+        videoEffects.registerBackground(b.id, b.url || b.dataUrl);
+      });
+
+      const vaultAccs = await RPGAssetVault.getAll('accessories');
+      vaultAccs.forEach(a => {
+        customAccessoriesMap.set(a.id, a);
+        videoEffects.registerAccessory(a.id, a.url || a.dataUrl);
+      });
+
+      // 2. Consulta a API do servidor que escaneia as pastas public/backgrounds e public/accessories
+      try {
+        const res = await fetch('/api/custom-assets/list');
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.success) {
+            (data.backgrounds || []).forEach(b => {
+              customBackgroundsMap.set(b.id, b);
+              videoEffects.registerBackground(b.id, b.url);
+              RPGAssetVault.save('backgrounds', b);
+            });
+            (data.accessories || []).forEach(a => {
+              customAccessoriesMap.set(a.id, a);
+              videoEffects.registerAccessory(a.id, a.url);
+              RPGAssetVault.save('accessories', a);
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[Assets] Modo offline ou servidor estático:', e);
+      }
+
+      // 3. Renderiza o Grid de Cenários
+      renderBackgroundCards();
+
+      // 4. Renderiza o Grid de Acessórios
+      renderAccessoryCards();
+
+      if (showToast) {
+        showLayoutNotification('🔄 Pastas de cenários e acessórios sincronizadas com sucesso!');
+      }
+    } catch (err) {
+      console.error('[Assets] Falha ao carregar mídias customizadas:', err);
+    }
+  }
+
+  function renderBackgroundCards() {
+    if (!bgGrid) return;
+
+    // Presets base
+    const defaultPresets = [
+      { id: 'none', name: 'Natural', icon: '🚫', thumbClass: 'bg-preset-none' },
+      { id: 'blur', name: 'Desfocado', icon: '💧', thumbClass: 'bg-preset-blur' },
+      { id: 'tavern', name: 'Taverna', icon: '🍺', thumbClass: 'bg-preset-tavern' },
+      { id: 'dungeon', name: 'Masmorra', icon: '🗝️', thumbClass: 'bg-preset-dungeon' },
+      { id: 'forest', name: 'Floresta', icon: '🌲', thumbClass: 'bg-preset-forest' },
+      { id: 'library', name: 'Biblioteca', icon: '📜', thumbClass: 'bg-preset-library' }
+    ];
+
+    let html = '';
+    defaultPresets.forEach(p => {
+      const active = state.bgPreset === p.id ? 'active' : '';
+      html += `
+        <div class="bg-preset-card ${active}" data-bg="${p.id}">
+          <div class="bg-preset-thumb ${p.thumbClass}">${p.icon}</div>
+          <span class="bg-preset-label">${p.name}</span>
+        </div>
+      `;
+    });
+
+    // Cenários escaneados das pastas
+    customBackgroundsMap.forEach(bg => {
+      if (['none', 'blur', 'tavern', 'dungeon', 'forest', 'library'].includes(bg.id)) return;
+      const active = state.bgPreset === bg.id ? 'active' : '';
+      html += `
+        <div class="bg-preset-card ${active}" data-bg="${bg.id}" title="${bg.name}">
+          <div class="bg-preset-thumb">
+            <img src="${bg.url}" class="bg-preset-thumb-img" alt="${bg.name}" loading="lazy" />
+          </div>
+          <span class="bg-preset-label">${bg.name}</span>
+        </div>
+      `;
+    });
+
+    bgGrid.innerHTML = html;
+
+    bgGrid.querySelectorAll('.bg-preset-card').forEach(card => {
+      card.onclick = () => {
+        const bgId = card.getAttribute('data-bg');
+        state.bgPreset = bgId;
+        if (customBackgroundsMap.has(bgId)) {
+          state.customBg = customBackgroundsMap.get(bgId).url;
+          StorageService.set(STORAGE_KEYS.CUSTOM_BG, state.customBg);
+        } else {
+          state.customBg = null;
+        }
+        StorageService.set(STORAGE_KEYS.BG_PRESET, bgId);
+        updateBgCardSelection();
+        applyFiltersAndAvatarVisuals();
+      };
+    });
+
+    updateBgCardSelection();
+  }
+
+  function renderAccessoryCards() {
+    if (!accGrid) return;
+
+    // Presets base vetoriais
+    const defaultAccs = [
+      { id: 'none', name: 'Nenhum', icon: '🚫', anchor: 'head' },
+      { id: 'crown', name: 'Coroa GM', icon: '👑', anchor: 'head' },
+      { id: 'wizard', name: 'Mago', icon: '🧙‍♂️', anchor: 'head' },
+      { id: 'helm', name: 'Elmo', icon: '🪖', anchor: 'head' },
+      { id: 'horns', name: 'Chifres', icon: '😈', anchor: 'head' },
+      { id: 'eyepatch', name: 'Tapa-olho', icon: '🏴‍☠️', anchor: 'eyes' },
+      { id: 'elf', name: 'Orelhas Elfo', icon: '🧝', anchor: 'head' },
+      { id: 'eyes', name: 'Olhos Mágicos', icon: '✨', anchor: 'eyes' },
+      { id: 'mask', name: 'Máscara', icon: '🥷', anchor: 'mouth' },
+      { id: 'beard', name: 'Barba Anão', icon: '🧔', anchor: 'mouth' },
+      { id: 'wings', name: 'Asas Astrais', icon: '🪽', anchor: 'side' },
+      { id: 'pet', name: 'Dragãozinho', icon: '🐉', anchor: 'side' }
+    ];
+
+    let html = '';
+    defaultAccs.forEach(a => {
+      const active = state.selectedAccessory === a.id ? 'active' : '';
+      html += `
+        <div class="acc-card ${active}" data-acc="${a.id}" data-anchor="${a.anchor}" title="${a.name}">
+          <span class="acc-card-icon">${a.icon}</span>
+          <span class="acc-card-label">${a.name}</span>
+        </div>
+      `;
+    });
+
+    // Acessórios adicionais da pasta public/accessories
+    customAccessoriesMap.forEach(acc => {
+      const active = state.selectedAccessory === acc.id ? 'active' : '';
+      const anchor = acc.defaultAnchor || 'head';
+      html += `
+        <div class="acc-card ${active}" data-acc="${acc.id}" data-anchor="${anchor}" title="${acc.name}">
+          <span class="acc-card-icon">
+            <img src="${acc.url}" class="acc-card-thumb-img" alt="${acc.name}" loading="lazy" />
+          </span>
+          <span class="acc-card-label">${acc.name}</span>
+          <span class="acc-card-badge">${anchor}</span>
+        </div>
+      `;
+    });
+
+    accGrid.innerHTML = html;
+
+    accGrid.querySelectorAll('.acc-card').forEach(card => {
+      card.onclick = () => {
+        const accId = card.getAttribute('data-acc');
+        const defaultAnchor = card.getAttribute('data-anchor') || 'head';
+
+        state.selectedAccessory = accId;
+        if (customAccessoriesMap.has(accId)) {
+          state.customAccessory = customAccessoriesMap.get(accId).url;
+          StorageService.set(STORAGE_KEYS.CUSTOM_ACCESSORY, state.customAccessory);
+        } else {
+          state.customAccessory = null;
+        }
+
+        StorageService.set(STORAGE_KEYS.ACCESSORY, accId);
+        setAccessoryAnchor(defaultAnchor, false);
+
+        updateAccCardSelection();
+        applyFiltersAndAvatarVisuals();
+      };
+    });
+
+    updateAccCardSelection();
+  }
+
+  if (btnReloadBgFolder) btnReloadBgFolder.onclick = () => loadCustomAssets(true);
+  if (btnReloadAccFolder) btnReloadAccFolder.onclick = () => loadCustomAssets(true);
+
+  // Validação e sanitização rigorosa de imagens enviadas pelo usuário
+  async function validateAndSanitizeImageUpload(file, type) {
+    if (!file) throw new Error('Nenhum arquivo selecionado.');
+
+    // 1. Limite de Tamanho do Arquivo (Background 10MB, Acessório 6MB)
+    const isAcc = type === 'accessory';
+    const maxSize = isAcc ? 6 * 1024 * 1024 : 10 * 1024 * 1024;
+    const maxMb = isAcc ? 6 : 10;
+    if (file.size > maxSize) {
+      throw new Error(`O arquivo excede o limite de ${maxMb} MB. Por favor, envie uma imagem otimizada.`);
+    }
+    if (file.size < 64) {
+      throw new Error('O arquivo está vazio ou inválido.');
+    }
+
+    // 2. Verificação de Tipo MIME e Extensão
+    const nameLower = file.name.toLowerCase();
+    if (isAcc) {
+      const isPngOrWebp = file.type === 'image/png' || file.type === 'image/webp' || nameLower.endsWith('.png') || nameLower.endsWith('.webp');
+      if (!isPngOrWebp) {
+        throw new Error('Acessórios devem ser em formato PNG ou WebP com fundo transparente. Imagens JPG têm fundo sólido e cobrem toda a sua câmera.');
+      }
+    } else {
+      const isAllowedBg = file.type.startsWith('image/') || /\.(jpe?g|png|webp)$/i.test(nameLower);
+      if (!isAllowedBg) {
+        throw new Error('O cenário deve ser uma imagem válida nos formatos JPG, PNG ou WebP.');
+      }
+    }
+
+    // 3. Sanitização e Limite do Nome do Arquivo (máximo 28 caracteres para o nome base)
+    const dotIndex = file.name.lastIndexOf('.');
+    const rawExt = dotIndex !== -1 ? file.name.substring(dotIndex).toLowerCase() : (isAcc ? '.png' : '.jpg');
+    let rawBase = dotIndex !== -1 ? file.name.substring(0, dotIndex) : 'item';
+    rawBase = rawBase
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '_')
+      .replace(/_+/g, '_')
+      .trim();
+
+    if (rawBase.length > 26) {
+      rawBase = rawBase.substring(0, 26);
+    }
+    if (!rawBase) rawBase = isAcc ? 'item_rpg' : 'cenario_rpg';
+
+    const safeFileName = `${rawBase}${rawExt}`;
+    const displayName = rawBase
+      .replace(/[_-]+/g, ' ')
+      .replace(/\b\w/g, l => l.toUpperCase())
+      .slice(0, 22);
+
+    // 4. Leitura e Decodificação da Imagem na Memória
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (evt) => resolve(evt.target.result);
+      reader.onerror = () => reject(new Error('Falha ao ler os dados do arquivo no navegador.'));
+      reader.readAsDataURL(file);
+    });
+
+    const img = await new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('O arquivo selecionado está corrompido ou não é uma imagem decodificável.'));
+      image.src = dataUrl;
+    });
+
+    // Dimensões mínimas e máximas de segurança
+    if (img.naturalWidth < 32 || img.naturalHeight < 32) {
+      throw new Error('A imagem é muito pequena (mínimo de 32x32 pixels necessário).');
+    }
+    if (img.naturalWidth > 4096 || img.naturalHeight > 4096) {
+      throw new Error('A resolução da imagem é muito alta (acima de 4096 pixels). Use uma imagem de até 1920x1080.');
+    }
+
+    return {
+      id: rawBase,
+      name: displayName,
+      fileName: safeFileName,
+      dataUrl,
+      width: img.naturalWidth,
+      height: img.naturalHeight
+    };
+  }
+
+  if (inputUploadBg) {
+    inputUploadBg.onchange = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const validated = await validateAndSanitizeImageUpload(file, 'background');
+
+        const newBg = {
+          id: validated.id,
+          name: validated.name,
+          fileName: validated.fileName,
+          url: validated.dataUrl
+        };
+
+        await RPGAssetVault.save('backgrounds', newBg);
+        customBackgroundsMap.set(validated.id, newBg);
+        videoEffects.registerBackground(validated.id, validated.dataUrl);
+
+        try {
+          const res = await fetch('/api/custom-assets/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'background',
+              fileName: validated.fileName,
+              dataUrl: validated.dataUrl
+            })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.file?.url) {
+              newBg.url = data.file.url;
+              customBackgroundsMap.set(validated.id, newBg);
+              videoEffects.registerBackground(validated.id, data.file.url);
+              RPGAssetVault.save('backgrounds', newBg);
+            }
+          }
+        } catch (err) {}
+
+        state.bgPreset = validated.id;
+        state.customBg = newBg.url;
+        StorageService.set(STORAGE_KEYS.BG_PRESET, validated.id);
+        StorageService.set(STORAGE_KEYS.CUSTOM_BG, newBg.url);
+
+        renderBackgroundCards();
+        applyFiltersAndAvatarVisuals();
+        showLayoutNotification('🏰 Cenário validado e salvo com sucesso!');
+      } catch (err) {
+        alert(err.message || 'Erro ao processar imagem de cenário.');
+      } finally {
+        if (e.target) e.target.value = '';
+      }
+    };
+  }
+
+  if (inputUploadAcc) {
+    inputUploadAcc.onchange = async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      try {
+        const validated = await validateAndSanitizeImageUpload(file, 'accessory');
+        const defaultAnchor = state.accessoryConfig?.anchor || 'head';
+
+        const newAcc = {
+          id: validated.id,
+          name: validated.name,
+          fileName: validated.fileName,
+          url: validated.dataUrl,
+          defaultAnchor
+        };
+
+        await RPGAssetVault.save('accessories', newAcc);
+        customAccessoriesMap.set(validated.id, newAcc);
+        videoEffects.registerAccessory(validated.id, validated.dataUrl);
+
+        try {
+          const res = await fetch('/api/custom-assets/upload', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              type: 'accessory',
+              fileName: validated.fileName,
+              dataUrl: validated.dataUrl,
+              anchor: defaultAnchor
+            })
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (data?.file?.url) {
+              newAcc.url = data.file.url;
+              customAccessoriesMap.set(validated.id, newAcc);
+              videoEffects.registerAccessory(validated.id, data.file.url);
+              RPGAssetVault.save('accessories', newAcc);
+            }
+          }
+        } catch (err) {}
+
+        state.selectedAccessory = validated.id;
+        state.customAccessory = newAcc.url;
+        StorageService.set(STORAGE_KEYS.ACCESSORY, validated.id);
+        StorageService.set(STORAGE_KEYS.CUSTOM_ACCESSORY, newAcc.url);
+
+        renderAccessoryCards();
+        applyFiltersAndAvatarVisuals();
+        showLayoutNotification('🎩 Acessório validado e salvo com sucesso!');
+      } catch (err) {
+        alert(err.message || 'Erro ao processar imagem do acessório.');
+      } finally {
+        if (e.target) e.target.value = '';
+      }
+    };
+  }
+
+  if (btnRemoveBg) {
+    btnRemoveBg.onclick = (e) => {
+      e.stopPropagation();
+      state.customBg = null;
+      state.bgPreset = 'none';
+      try { localStorage.removeItem(STORAGE_KEYS.CUSTOM_BG); } catch (err) {}
+      StorageService.set(STORAGE_KEYS.BG_PRESET, 'none');
+      updateBgCardSelection();
+      applyFiltersAndAvatarVisuals();
+      showLayoutNotification('Cenário desativado.');
+    };
+  }
+
+  if (btnRemoveAcc) {
+    btnRemoveAcc.onclick = (e) => {
+      e.stopPropagation();
+      state.customAccessory = null;
+      state.selectedAccessory = 'none';
+      try { localStorage.removeItem(STORAGE_KEYS.CUSTOM_ACCESSORY); } catch (err) {}
+      StorageService.set(STORAGE_KEYS.ACCESSORY, 'none');
+      updateAccCardSelection();
+      applyFiltersAndAvatarVisuals();
+      showLayoutNotification('Acessório desativado.');
+    };
+  }
+
+  const handleSliderInput = () => {
+    if (sliderScale) state.accessoryConfig.scale = parseInt(sliderScale.value, 10);
+    if (sliderPosY) state.accessoryConfig.y = parseInt(sliderPosY.value, 10);
+    if (sliderPosX) state.accessoryConfig.x = parseInt(sliderPosX.value, 10);
+
+    if (labelScale) labelScale.textContent = `${state.accessoryConfig.scale}%`;
+    if (labelPosY) labelPosY.textContent = `${state.accessoryConfig.y}%`;
+    if (labelPosX) labelPosX.textContent = `${state.accessoryConfig.x}%`;
+
+    StorageService.set(STORAGE_KEYS.ACCESSORY_CONFIG, JSON.stringify(state.accessoryConfig));
+    applyFiltersAndAvatarVisuals();
+  };
+
+  [sliderScale, sliderPosY, sliderPosX].forEach(s => {
+    if (s) s.oninput = handleSliderInput;
+  });
+
+  if (btnResetPos) {
+    btnResetPos.onclick = () => {
+      const anchor = state.accessoryConfig?.anchor || 'head';
+      setAccessoryAnchor(anchor, true);
+      showLayoutNotification('Posição restaurada para a âncora padrão.');
+    };
+  }
+
+  // Carrega e sincroniza o cofre e as pastas
+  loadCustomAssets();
+
+  updateAccCardSelection();
+  updateAccSlidersUi();
+
+  // --- SEÇÃO 4: FILTROS DE CLIMA & ILUMINAÇÃO ---
+  const filterBtns = modal.querySelectorAll('.btn-color-filter');
+  const updateFilterBtnsUi = () => {
+    filterBtns.forEach(btn => {
+      if (btn.getAttribute('data-filter') === state.colorFilter) {
+        btn.classList.add('active');
+      } else {
+        btn.classList.remove('active');
+      }
+    });
+  };
+
+  filterBtns.forEach(btn => {
+    btn.onclick = () => {
+      const filter = btn.getAttribute('data-filter');
+      state.colorFilter = filter;
+      StorageService.set(STORAGE_KEYS.COLOR_FILTER, filter);
+      updateFilterBtnsUi();
+      applyFiltersAndAvatarVisuals();
+    };
+  });
+
+  updateFilterBtnsUi();
 }
 
 // ============================================================================
@@ -3733,11 +5021,24 @@ function openSettingsModal(targetTabId = null) {
         p.classList.remove('active');
       }
     });
+
+    if (targetTabId === 'tab-filters') {
+      const hasActiveCam = (lobbyStream && lobbyStream.getVideoTracks().some(t => t.readyState === 'live')) ||
+                           (state.webrtc && !state.isVideoOff);
+      if (hasActiveCam && typeof window.__startSettingsCamPreview === 'function') {
+        setTimeout(() => window.__startSettingsCamPreview(), 100);
+      }
+    } else if (typeof window.__stopSettingsCamPreview === 'function') {
+      window.__stopSettingsCamPreview();
+    }
   }
 }
 
 function closeSettingsModal() {
   document.getElementById('settings-modal').classList.add('hidden');
+  if (typeof window.__stopSettingsCamPreview === 'function') {
+    window.__stopSettingsCamPreview();
+  }
 }
 
 function escapeHtml(text) {

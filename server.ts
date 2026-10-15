@@ -1,5 +1,6 @@
 import express, { Request, Response } from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 
 interface PeerInfo {
@@ -76,7 +77,192 @@ async function startServer() {
   const app = express();
   const PORT = getPort();
 
-  app.use(express.json());
+  app.use(express.json({ limit: "25mb" }));
+  app.use(express.urlencoded({ extended: true, limit: "25mb" }));
+
+  const backgroundsDir = path.join(process.cwd(), "public", "backgrounds");
+  const accessoriesDir = path.join(process.cwd(), "public", "accessories");
+
+  if (!fs.existsSync(backgroundsDir)) fs.mkdirSync(backgroundsDir, { recursive: true });
+  if (!fs.existsSync(accessoriesDir)) fs.mkdirSync(accessoriesDir, { recursive: true });
+
+  // Servir estáticos de cenários e adereços com CORS
+  app.use("/backgrounds", express.static(backgroundsDir, {
+    setHeaders: (res) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+    }
+  }));
+  app.use("/accessories", express.static(accessoriesDir, {
+    setHeaders: (res) => {
+      res.setHeader("Access-Control-Allow-Origin", "*");
+      res.setHeader("Cache-Control", "public, max-age=3600");
+    }
+  }));
+
+  function formatAssetTitle(fileName: string): string {
+    const nameWithoutExt = fileName.replace(/\.[^/.]+$/, "");
+    return nameWithoutExt
+      .replace(/[_-]+/g, " ")
+      .replace(/\b\w/g, (l) => l.toUpperCase());
+  }
+
+  function detectDefaultAnchor(fileName: string): string {
+    const lower = fileName.toLowerCase();
+    if (/chapeu|coroa|elmo|chifre|tiara|topo|head|wizard|helm|crown|cap/i.test(lower)) return "head";
+    if (/oculos|tapa_olho|olho|eye|glasses/i.test(lower)) return "eyes";
+    if (/mascara|barba|bigode|boca|queixo|mouth|beard|mask/i.test(lower)) return "mouth";
+    if (/peito|colar|armadura|ombro|chest/i.test(lower)) return "chest";
+    if (/dragao|mascote|asa|lateral|side|pet|wing/i.test(lower)) return "side";
+    return "head";
+  }
+
+  // 0. API para listar e gerenciar cenários e adereços de RPG das pastas locais
+  app.get("/api/custom-assets/list", (_req: Request, res: Response) => {
+    try {
+      const validImgRegex = /\.(png|jpe?g|webp|svg)$/i;
+
+      const bgFiles = fs.readdirSync(backgroundsDir).filter(f => validImgRegex.test(f));
+      const accFiles = fs.readdirSync(accessoriesDir).filter(f => validImgRegex.test(f));
+
+      const backgrounds = bgFiles.map(file => {
+        const stat = fs.statSync(path.join(backgroundsDir, file));
+        return {
+          id: file.replace(/\.[^/.]+$/, "").toLowerCase().replace(/[^a-z0-9_-]/g, "_"),
+          name: formatAssetTitle(file),
+          fileName: file,
+          url: `/backgrounds/${file}`,
+          size: stat.size,
+          mtime: stat.mtimeMs
+        };
+      });
+
+      const accessories = accFiles.map(file => {
+        const stat = fs.statSync(path.join(accessoriesDir, file));
+        return {
+          id: file.replace(/\.[^/.]+$/, "").toLowerCase().replace(/[^a-z0-9_-]/g, "_"),
+          name: formatAssetTitle(file),
+          fileName: file,
+          url: `/accessories/${file}`,
+          defaultAnchor: detectDefaultAnchor(file),
+          size: stat.size,
+          mtime: stat.mtimeMs
+        };
+      });
+
+      res.setHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+      res.json({ success: true, backgrounds, accessories });
+    } catch (err: any) {
+      console.error("[Assets API] Erro ao listar mídias:", err);
+      res.status(500).json({ success: false, error: "Falha ao escanear pastas de mídias locais." });
+    }
+  });
+
+  // Upload e salvamento direto na pasta correspondente com validação completa
+  app.post("/api/custom-assets/upload", (req: Request, res: Response) => {
+    try {
+      const { type, fileName, dataUrl, anchor } = req.body;
+      if (!type || !fileName || !dataUrl) {
+        return res.status(400).json({ success: false, error: "Parâmetros obrigatórios ausentes." });
+      }
+
+      if (type !== "background" && type !== "accessory") {
+        return res.status(400).json({ success: false, error: "Tipo de mídia inválido. Use 'background' ou 'accessory'." });
+      }
+
+      // 1. Validação e sanitização rigorosa do nome do arquivo (máx 35 caracteres)
+      const rawExt = path.extname(fileName).toLowerCase();
+      let allowedExts = type === "background" ? [".jpg", ".jpeg", ".png", ".webp"] : [".png", ".webp"];
+      if (!allowedExts.includes(rawExt)) {
+        if (type === "accessory") {
+          return res.status(400).json({
+            success: false,
+            error: "Acessórios de RPG devem ser arquivos PNG ou WebP com transparência. Arquivos JPG possuem fundo sólido."
+          });
+        } else {
+          return res.status(400).json({
+            success: false,
+            error: "Formato de imagem inválido para cenário. Use JPG, PNG ou WebP."
+          });
+        }
+      }
+
+      // Normaliza nome, remove acentos, espaços e caracteres que possam quebrar caminhos ou layout
+      const rawBase = path.basename(fileName, rawExt)
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, "_")
+        .replace(/_+/g, "_")
+        .slice(0, 32); // Limite de 32 chars no nome base
+
+      const safeBaseName = rawBase.length > 0 ? rawBase : "item";
+      const finalFileName = `${safeBaseName}${rawExt}`;
+      const targetDir = type === "background" ? backgroundsDir : accessoriesDir;
+      const targetPath = path.join(targetDir, finalFileName);
+
+      // 2. Validação de dados Base64 e tamanho máximo
+      const matches = dataUrl.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+      if (!matches || !matches[2]) {
+        return res.status(400).json({ success: false, error: "Estrutura de imagem Base64 corrompida ou inválida." });
+      }
+
+      const mime = matches[1].toLowerCase();
+      if (!mime.startsWith("image/")) {
+        return res.status(400).json({ success: false, error: "O arquivo enviado não é uma imagem." });
+      }
+
+      const buffer = Buffer.from(matches[2], "base64");
+      const maxSize = type === "background" ? 10 * 1024 * 1024 : 6 * 1024 * 1024; // 10MB fundo, 6MB acessório
+
+      if (buffer.length > maxSize) {
+        return res.status(400).json({
+          success: false,
+          error: `Arquivo excede o limite máximo permitido (${type === "background" ? "10 MB" : "6 MB"}).`
+        });
+      }
+
+      if (buffer.length < 64) {
+        return res.status(400).json({ success: false, error: "Arquivo vazio ou inválido." });
+      }
+
+      fs.writeFileSync(targetPath, buffer);
+      console.log(`[Assets API] Nova mídia validada e salva: ${type} -> ${finalFileName} (${buffer.length} bytes)`);
+
+      const fileInfo = {
+        id: safeBaseName,
+        name: formatAssetTitle(finalFileName),
+        fileName: finalFileName,
+        url: `/${type === "background" ? "backgrounds" : "accessories"}/${finalFileName}`,
+        defaultAnchor: anchor || detectDefaultAnchor(finalFileName)
+      };
+
+      res.json({ success: true, file: fileInfo });
+    } catch (err: any) {
+      console.error("[Assets API] Falha ao processar upload:", err);
+      res.status(500).json({ success: false, error: err.message || "Erro ao salvar arquivo em disco." });
+    }
+  });
+
+  // Remoção de mídia da pasta
+  app.delete("/api/custom-assets/:type/:fileName", (req: Request, res: Response) => {
+    try {
+      const { type, fileName } = req.params;
+      const targetDir = type === "background" ? backgroundsDir : accessoriesDir;
+      const safeFileName = path.basename(fileName);
+      const targetPath = path.join(targetDir, safeFileName);
+
+      if (fs.existsSync(targetPath)) {
+        fs.unlinkSync(targetPath);
+        console.log(`[Assets API] Mídia excluída: ${type} -> ${safeFileName}`);
+        return res.json({ success: true });
+      }
+      res.status(404).json({ success: false, error: "Arquivo não encontrado." });
+    } catch (err: any) {
+      console.error("[Assets API] Erro ao excluir mídia:", err);
+      res.status(500).json({ success: false, error: "Erro ao excluir arquivo." });
+    }
+  });
 
   // API de Saúde e Versão (Usada pelo Auto-Updater do PWA)
   app.get("/api/health", (_req: Request, res: Response) => {

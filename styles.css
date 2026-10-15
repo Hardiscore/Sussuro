@@ -975,6 +975,7 @@ main#app-container > section#lobby-screen .lobby-subtitle,
   display: flex;
   align-items: center;
   justify-content: space-between;
+  z-index: 10;
 }
 
 .tile-participant-info {
@@ -2760,5 +2761,520 @@ main#app-container > section#lobby-screen .lobby-subtitle,
     left: 12px !important;
   }
 }
+
+/* ==========================================================================
+   ESTILOS PARA FILTROS & AVATAR DE RPG (PNGTUBER, FUNDOS E ACESSÓRIOS)
+   ========================================================================== */
+
+/* 1. Avatar PNGTuber Reativo */
+.pngtuber-preview-box {
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  background: var(--bg-card);
+  border: 2px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  position: relative;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Quando uma imagem é upada como avatar, a prévia expande para proporção ampla de câmera */
+.pngtuber-preview-box.has-custom-img {
+  width: 170px;
+  height: 110px;
+  border-radius: 10px;
+  border: 2px solid var(--accent-blurple);
+  background: #0e0f10;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6);
+}
+
+.pngtuber-preview-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.pngtuber-preview-box.has-custom-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 8px;
+}
+
+.avatar-pngtuber-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+  transition: transform 0.12s ease-out, filter 0.12s ease-out;
+}
+
+/* Quando uma imagem é upada como avatar, preenche todo o card exatamente como uma câmera */
+.avatar-fallback.has-custom-img,
+.preview-avatar.has-custom-img {
+  position: absolute;
+  inset: 0 !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  border-radius: 0 !important;
+  border: none !important;
+  box-shadow: none !important;
+  background: #0e0f10 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  overflow: hidden !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  z-index: 1;
+}
+
+.avatar-fallback.has-custom-img .avatar-pngtuber-img,
+.preview-avatar.has-custom-img .avatar-pngtuber-img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  object-position: center center !important;
+  border-radius: 0 !important;
+  display: block !important;
+  transform-origin: center bottom;
+  transition: transform 0.12s ease-out, filter 0.12s ease-out;
+}
+
+/* Cenários RPG ativos atrás da imagem do personagem quando ela possui transparência */
+.bg-tavern-theme .avatar-fallback.has-custom-img,
+.bg-dungeon-theme .avatar-fallback.has-custom-img,
+.bg-forest-theme .avatar-fallback.has-custom-img,
+.bg-library-theme .avatar-fallback.has-custom-img,
+.bg-blur-theme .avatar-fallback.has-custom-img,
+.bg-tavern-theme .preview-avatar.has-custom-img,
+.bg-dungeon-theme .preview-avatar.has-custom-img,
+.bg-forest-theme .preview-avatar.has-custom-img,
+.bg-library-theme .preview-avatar.has-custom-img,
+.bg-blur-theme .preview-avatar.has-custom-img {
+  background: transparent !important;
+}
+
+/* Animações reativas de fala do PNGTuber em formato grande de câmera */
+.video-tile.speaking .avatar-fallback.has-custom-img .avatar-pngtuber-img.bounce-active,
+.preview-video-box.speaking .preview-avatar.has-custom-img .avatar-pngtuber-img.bounce-active,
+.pngtuber-preview-box.speaking.has-custom-img img.bounce-active {
+  transform: translateY(-6px) scale(1.02);
+}
+
+.video-tile.speaking .avatar-fallback.has-custom-img.glow-active,
+.preview-video-box.speaking .preview-avatar.has-custom-img.glow-active,
+.pngtuber-preview-box.speaking.has-custom-img.glow-active {
+  box-shadow: inset 0 0 28px rgba(88, 101, 242, 0.9), inset 0 0 10px rgba(59, 130, 246, 0.7) !important;
+}
+
+/* Pulinho suave quando está falando (ícone padrão circular) */
+.video-tile.speaking .avatar-fallback:not(.has-custom-img) .avatar-pngtuber-img.bounce-active,
+.preview-video-box.speaking .preview-avatar:not(.has-custom-img) .avatar-pngtuber-img.bounce-active,
+.pngtuber-preview-box.speaking:not(.has-custom-img) img.bounce-active {
+  transform: translateY(-8px) scale(1.05);
+}
+
+/* Aura mágica brilhante quando fala (ícone padrão circular) */
+.video-tile.speaking .avatar-fallback:not(.has-custom-img).glow-active,
+.preview-video-box.speaking .preview-avatar:not(.has-custom-img).glow-active,
+.pngtuber-preview-box.speaking:not(.has-custom-img).glow-active {
+  box-shadow: 0 0 24px rgba(88, 101, 242, 0.9), 0 0 10px rgba(88, 101, 242, 0.6) !important;
+  border-color: var(--accent-cyan) !important;
+}
+
+/* 2. Grid de Presets de Plano de Fundo */
+.background-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(95px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+  width: 100%;
+}
+
+.bg-preset-card {
+  background: var(--bg-card);
+  border: 2px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.bg-preset-card:hover {
+  background: var(--bg-card-hover);
+  border-color: rgba(255, 255, 255, 0.25);
+  transform: translateY(-2px);
+}
+
+.bg-preset-card.active {
+  border-color: var(--accent-blurple);
+  background: rgba(88, 101, 242, 0.15);
+  box-shadow: 0 0 12px rgba(88, 101, 242, 0.35);
+}
+
+.bg-preset-thumb {
+  width: 100%;
+  height: 48px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  overflow: hidden;
+}
+
+.bg-preset-none { background: #111214; }
+.bg-preset-blur { background: linear-gradient(135deg, #1e1f22, #3f4147); backdrop-filter: blur(8px); }
+.bg-preset-tavern { background: linear-gradient(135deg, #451a03, #78350f); }
+.bg-preset-dungeon { background: linear-gradient(135deg, #0f172a, #1e293b); }
+.bg-preset-forest { background: linear-gradient(135deg, #064e3b, #047857); }
+.bg-preset-library { background: linear-gradient(135deg, #3b0764, #581c87); }
+
+.bg-preset-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-normal);
+  text-align: center;
+  width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 3. Grid de Acessórios de RPG */
+.accessory-cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+  width: 100%;
+}
+
+.acc-card {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+  min-width: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.acc-card:hover {
+  background: var(--bg-card-hover);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.acc-card.active {
+  border-color: var(--accent-gold);
+  background: rgba(240, 178, 50, 0.12);
+  color: var(--accent-gold);
+}
+
+.acc-card-icon {
+  font-size: 16px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.acc-card-thumb-img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.6));
+}
+
+.bg-preset-thumb-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
+.acc-card-badge {
+  font-size: 8px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(240, 178, 50, 0.18);
+  color: var(--accent-gold);
+  margin-left: auto;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  flex-shrink: 0;
+}
+
+.acc-card-label {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 0%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Painel de ajuste de posição do acessório */
+.accessory-adjust-panel {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+}
+
+/* Botões de Ponto de Fixação (Âncoras Pré-definidas) */
+.btn-acc-anchor {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-normal);
+  padding: 5px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  user-select: none;
+}
+
+.btn-acc-anchor:hover {
+  background: var(--bg-card-hover);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #fff;
+}
+
+.btn-acc-anchor.active {
+  background: rgba(240, 178, 50, 0.18);
+  border-color: var(--accent-gold);
+  color: var(--accent-gold);
+  box-shadow: 0 0 8px rgba(240, 178, 50, 0.25);
+}
+
+/* Camada visual do acessório desenhada por cima do Avatar ou Câmera */
+/* Canvas acelerado de efeitos de vídeo em tempo real */
+.tile-video-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1); /* Espelha o vídeo local para visão natural */
+  z-index: 2;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
+.tile-video-canvas.hidden {
+  display: none !important;
+}
+
+/* Camada visual do acessório desenhada por cima do Avatar ou Câmera com Face Tracking */
+.tile-accessory-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100px;
+  height: 100px;
+  transition: transform 0.05s linear;
+  will-change: transform, left, top;
+}
+
+.pngtuber-preview-box .tile-accessory-overlay {
+  width: 60px;
+  height: 60px;
+}
+
+.tile-accessory-overlay.hidden {
+  display: none !important;
+}
+
+.tile-accessory-overlay svg,
+.tile-accessory-overlay img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.75));
+}
+
+/* Camada Atmosférica de Iluminação e Clima (Sem alterar o tom natural da pele) */
+.atmosphere-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 6;
+  border-radius: inherit;
+  transition: opacity 0.3s ease;
+}
+
+.atmosphere-overlay.hidden {
+  display: none !important;
+}
+
+/* 1. Luz de Fogueira / Calor da Taverna */
+.atmosphere-overlay.filter-campfire {
+  background: radial-gradient(circle at 50% 65%, rgba(245, 158, 11, 0.08) 0%, rgba(180, 83, 9, 0.22) 65%, rgba(69, 26, 3, 0.5) 100%);
+  mix-blend-mode: color-dodge;
+  animation: flicker-torch 3.5s infinite alternate ease-in-out;
+}
+
+/* 2. Masmorra Sombria: Sombras profundas nas bordas, rosto iluminado naturalmente (SEM AZULAMENTO) */
+.atmosphere-overlay.filter-dungeon-shadow {
+  background: radial-gradient(ellipse at 50% 48%, transparent 35%, rgba(15, 23, 42, 0.75) 75%, rgba(2, 6, 23, 0.95) 100%);
+  mix-blend-mode: multiply;
+}
+
+/* 3. Pergaminho Antigo: Livro de regras medieval */
+.atmosphere-overlay.filter-parchment {
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(120, 53, 15, 0.25) 75%, rgba(69, 26, 3, 0.6) 100%);
+  mix-blend-mode: multiply;
+}
+
+/* 4. Noite Arcana / Luar: Contraste noturno frio e elegante sem Smurf blue na pele */
+.atmosphere-overlay.filter-arcane-night {
+  background: radial-gradient(circle at 50% 45%, transparent 40%, rgba(30, 27, 75, 0.45) 75%, rgba(15, 23, 42, 0.85) 100%);
+  mix-blend-mode: soft-light;
+}
+
+@keyframes flicker-torch {
+  0% { opacity: 0.85; }
+  50% { opacity: 1; }
+  100% { opacity: 0.92; }
+}
+
+/* Temas de Cenário de RPG para Tiles em Modo Avatar (Câmera Desligada) */
+.video-tile.bg-tavern-theme,
+.preview-video-box.bg-tavern-theme {
+  background: radial-gradient(circle at center, rgba(120, 53, 15, 0.45) 0%, rgba(30, 20, 10, 0.95) 100%),
+              repeating-linear-gradient(90deg, rgba(69, 26, 3, 0.35) 0px, rgba(69, 26, 3, 0.35) 40px, rgba(40, 15, 2, 0.55) 41px) !important;
+}
+
+.video-tile.bg-dungeon-theme,
+.preview-video-box.bg-dungeon-theme {
+  background: radial-gradient(circle at center, rgba(30, 41, 59, 0.65) 0%, rgba(15, 23, 42, 0.98) 100%),
+              radial-gradient(circle at 20% 30%, rgba(240, 178, 50, 0.16) 0%, transparent 45%) !important;
+}
+
+.video-tile.bg-forest-theme,
+.preview-video-box.bg-forest-theme {
+  background: radial-gradient(circle at center, rgba(6, 78, 59, 0.65) 0%, rgba(2, 44, 34, 0.98) 100%),
+              radial-gradient(circle at 80% 20%, rgba(52, 211, 153, 0.22) 0%, transparent 50%) !important;
+}
+
+.video-tile.bg-library-theme,
+.preview-video-box.bg-library-theme {
+  background: radial-gradient(circle at center, rgba(88, 28, 135, 0.55) 0%, rgba(30, 10, 50, 0.98) 100%),
+              radial-gradient(circle at 30% 70%, rgba(240, 178, 50, 0.14) 0%, transparent 45%) !important;
+}
+
+/* 4. Botões de Filtro de Clima / Atmosfera */
+.color-filter-cards button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 6px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--text-normal);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.color-filter-cards button:hover {
+  background: var(--bg-card-hover);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.color-filter-cards button.active {
+  border-color: var(--accent-gold);
+  background: rgba(240, 178, 50, 0.15);
+  color: var(--accent-gold);
+}
+
+/* Filtros sutis de cor diretamente na tag <video> caso o canvas esteja inativo */
+video.filter-campfire {
+  filter: contrast(1.08) brightness(1.03) saturate(1.15) sepia(0.12);
+}
+
+video.filter-dungeon-shadow {
+  filter: contrast(1.24) brightness(0.86) saturate(0.92);
+}
+
+video.filter-parchment {
+  filter: sepia(0.3) contrast(1.1) brightness(0.96) saturate(0.95);
+}
+
+video.filter-arcane-night {
+  filter: contrast(1.16) brightness(0.9) saturate(0.9);
+}
+
+/* Prévia da Câmera no Modal de Filtros e Avatar */
+.filters-camera-preview-box {
+  position: relative;
+  width: 100%;
+  height: 230px;
+  background: #0d0e11;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 24px rgba(0, 0, 0, 0.7);
+}
+
+.filters-camera-preview-box video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+}
+
+.filters-preview-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+  z-index: 1;
+}
+
 
 

@@ -1,0 +1,21 @@
+========================================================================
+SUSSURRO RPG - GUIA DE PARÂMETROS PARA IMAGENS DE CENÁRIO (BACKGROUND)
+========================================================================
+
+Qualquer imagem que você colocar nesta pasta ("public/backgrounds") será
+automaticamente reconhecida pelo programa no menu "Filtros e Avatar"!
+
+1. PARÂMETROS RECOMENDADOS:
+   • Resolução Ideal: 1920x1080 (Full HD) ou 1280x720 (HD).
+   • Proporção: 16:9 (widescreen padrão de webcam e monitores).
+   • Formatos aceitos: .jpg, .jpeg, .png, .webp
+   • Tamanho do arquivo: Entre 200 KB e 5 MB (imagens muito pesadas podem demorar a carregar).
+   • Nome do arquivo: Use nomes descritivos com letras minúsculas e sublinhado (ex: taverna_animada.jpg, caverna_do_dragao.png). O nome do arquivo será usado como o título do cenário na tela!
+
+2. DICAS DE ENQUADRAMENTO PARA RPG:
+   • Seu corpo e rosto ficarão no centro da tela.
+   • Escolha imagens com sensação de profundidade e ambiente (tochas, lareiras, estantes, árvores nas laterais).
+   • Evite imagens com objetos grandes desenhados bem no centro, pois sua câmera vai ficar por cima deles.
+
+3. PERSISTÊNCIA:
+   • As imagens adicionadas nesta pasta ficam salvas no seu computador e NÃO são apagadas nas atualizações!

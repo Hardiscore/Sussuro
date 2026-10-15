@@ -96,6 +96,8 @@ export class TavernWebRTC {
     this.userInfo = {
       name: options.name || 'Aventureiro',
       role: options.role || 'jogador', // 'mestre' ou 'jogador'
+      classIcon: options.classIcon || '⚔️',
+      customAvatar: options.customAvatar || null,
       audioMuted: false,
       videoOff: false,
       isScreenSharing: false,
@@ -133,6 +135,10 @@ export class TavernWebRTC {
     this.currentMixedAudioTrack = null;
     this.onScreenShareEnded = null;
 
+    // Stream e faixa da câmera crua do hardware (isolada de filtros/canvas)
+    this.rawVideoTrack = null;
+    this.rawVideoStream = null;
+
     // Sinalização
     this.firebaseDb = null;
     this.isFirebaseMode = false;
@@ -167,6 +173,24 @@ export class TavernWebRTC {
     this.onNoAudioWarning = options.onNoAudioWarning || (() => {});
     this.onVersionMismatch = options.onVersionMismatch || (() => {});
     this.onDiceBlockedStateChange = options.onDiceBlockedStateChange || (() => {});
+  }
+
+  /**
+   * Retorna a MediaStream contendo exclusivamente a trilha crua da webcam física,
+   * completamente isolada de filtros de tela e capturas de canvas para prevenir loops de zoom.
+   */
+  getRawVideoStream() {
+    if (!this.rawVideoStream) {
+      this.rawVideoStream = new MediaStream();
+    }
+    if (this.rawVideoTrack) {
+      const currentTracks = this.rawVideoStream.getVideoTracks();
+      if (!currentTracks.includes(this.rawVideoTrack)) {
+        currentTracks.forEach(t => this.rawVideoStream.removeTrack(t));
+        this.rawVideoStream.addTrack(this.rawVideoTrack);
+      }
+    }
+    return this.rawVideoStream;
   }
 
   /**
@@ -275,6 +299,8 @@ export class TavernWebRTC {
       if (camStream) {
         const camTrack = camStream.getVideoTracks()[0];
         if (camTrack) {
+          this.rawVideoTrack = camTrack;
+          this.getRawVideoStream();
           this.localStream.addTrack(camTrack);
           camTrack.enabled = !this.userInfo.videoOff;
         }
@@ -292,7 +318,7 @@ export class TavernWebRTC {
     if (this.hasAudioDevice) {
       this.setupAudioAnalyser(this.localStream);
     }
-    this.onLocalStreamReady(this.localStream);
+    this.onLocalStreamReady(this.localStream, this.getRawVideoStream());
 
     return this.localStream;
   }
@@ -557,6 +583,8 @@ export class TavernWebRTC {
       });
       const newTrack = newStream.getVideoTracks()[0];
       newTrack.enabled = !this.userInfo.videoOff;
+      this.rawVideoTrack = newTrack;
+      this.getRawVideoStream();
 
       for (const [peerId, peer] of this.peers.entries()) {
         const senders = peer.connection.getSenders();
@@ -569,10 +597,10 @@ export class TavernWebRTC {
       const oldTrack = this.localStream.getVideoTracks()[0];
       if (oldTrack) {
         this.localStream.removeTrack(oldTrack);
-        oldTrack.stop();
+        if (oldTrack !== this.rawVideoTrack) oldTrack.stop();
       }
       this.localStream.addTrack(newTrack);
-      this.onLocalStreamReady(this.localStream);
+      this.onLocalStreamReady(this.localStream, this.getRawVideoStream());
       console.log('[WebRTC] Câmera alterada com sucesso (suporte OBS):', deviceId);
       return true;
     } catch (err) {
@@ -639,7 +667,7 @@ export class TavernWebRTC {
             console.warn('[WebRTC] Não foi possível ativar câmera sob demanda:', fallbackErr);
             this.userInfo.videoOff = true;
             this.broadcastMetadata();
-            this.onLocalStreamReady(this.localStream);
+            this.onLocalStreamReady(this.localStream, this.getRawVideoStream());
             return true;
           }
         }
@@ -647,19 +675,24 @@ export class TavernWebRTC {
         if (camStream) {
           videoTrack = camStream.getVideoTracks()[0];
           if (videoTrack) {
+            this.rawVideoTrack = videoTrack;
+            this.getRawVideoStream();
             if (!this.localStream) this.localStream = new MediaStream();
             const oldV = this.localStream.getVideoTracks()[0];
-            if (oldV) {
+            if (oldV && oldV !== videoTrack) {
               this.localStream.removeTrack(oldV);
-              oldV.stop();
+              if (oldV !== this.rawVideoTrack) oldV.stop();
             }
-            this.localStream.addTrack(videoTrack);
+            if (!this.localStream.getVideoTracks().includes(videoTrack)) {
+              this.localStream.addTrack(videoTrack);
+            }
           }
         }
       }
 
       if (videoTrack) {
         videoTrack.enabled = true;
+        if (this.rawVideoTrack) this.rawVideoTrack.enabled = true;
         this.userInfo.videoOff = false;
 
         // Anexa ou substitui a faixa de vídeo em todas as conexões P2P e renegocia
@@ -706,6 +739,9 @@ export class TavernWebRTC {
       if (videoTrack) {
         videoTrack.enabled = false;
       }
+      if (this.rawVideoTrack) {
+        this.rawVideoTrack.enabled = false;
+      }
       for (const peerId of this.peers.keys()) {
         this.sendSignal(peerId, {
           type: 'cam-state',
@@ -715,8 +751,36 @@ export class TavernWebRTC {
     }
 
     this.broadcastMetadata();
-    this.onLocalStreamReady(this.localStream);
+    this.onLocalStreamReady(this.localStream, this.getRawVideoStream());
     return this.userInfo.videoOff;
+  }
+
+  /**
+   * Substitui dinamicamente a faixa de vídeo transmitida aos peers (filtros, desfoque de fundo, cenários de RPG)
+   */
+  async updateFilteredVideoTrack(newTrack) {
+    if (!this.localStream || !newTrack) return;
+    const currentVideoTrack = this.localStream.getVideoTracks()[0];
+    if (currentVideoTrack === newTrack) return;
+
+    if (currentVideoTrack) {
+      this.localStream.removeTrack(currentVideoTrack);
+    }
+    this.localStream.addTrack(newTrack);
+
+    for (const peer of this.peers.values()) {
+      const pc = peer.connection;
+      if (!pc) continue;
+      const senders = pc.getSenders();
+      const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+      if (videoSender) {
+        try {
+          await videoSender.replaceTrack(newTrack);
+        } catch (e) {
+          console.warn('[WebRTC] Erro ao substituir track no sender:', e);
+        }
+      }
+    }
   }
 
   /**
@@ -2255,6 +2319,12 @@ export class TavernWebRTC {
       this.screenStream = null;
       this.isScreenSharing = false;
     }
+
+    if (this.rawVideoStream) {
+      this.rawVideoStream.getTracks().forEach(t => t.stop());
+      this.rawVideoStream = null;
+    }
+    this.rawVideoTrack = null;
 
     if (this.localStream) {
       this.localStream.getTracks().forEach(t => t.stop());

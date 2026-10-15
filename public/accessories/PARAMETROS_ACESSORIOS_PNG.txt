@@ -1,0 +1,25 @@
+========================================================================
+SUSSURRO RPG - GUIA DE PARÂMETROS PARA ACESSÓRIOS & ADEREÇOS (PNG)
+========================================================================
+
+Qualquer imagem PNG que você colocar nesta pasta ("public/accessories") será
+automaticamente reconhecida pelo programa e poderá ser equipada na sua câmera!
+
+1. PARÂMETROS OBRIGATÓRIOS & RECOMENDADOS:
+   • Fundo: 100% TRANSPARENTE (Canal Alpha / RGBA de 32 bits).
+     ATENÇÃO: NÃO use arquivos JPG para acessórios, pois JPG não tem transparência e ficará com um quadrado branco/preto!
+   • Formatos aceitos: .png, .webp (com transparência).
+   • Resolução Ideal: 512x512 pixels ou 1024x1024 pixels (quadrado).
+   • Margem/Respiro: Deixe cerca de 10% a 15% de margem transparente ao redor do desenho para não cortar as pontas.
+   • Peso: Menos de 2 MB por arquivo para garantir 60 FPS no rastreamento facial.
+
+2. PONTOS DE ANCORAGEM (ANCHOR) AUTOMÁTICOS:
+   Você pode definir onde o acessório se prende selecionando o ponto na tela do app ou nomeando o arquivo com um sufixo:
+   • Topo da Cabeça (head): Chapeus, elmos, tiaras, coroas, orelhas de animais.
+   • Olhos / Rosto (eyes): Óculos, tapa-olhos, monóculos, vendas místicas.
+   • Boca / Queixo (mouth): Máscaras, barbas de anão, bigodes, cachimbos.
+   • Ombros / Peito (chest): Capas, armaduras de ombro, colares, emblemas.
+   • Lateral / Mascote (side): Dragões de ombro, corujas, fadas familiares, asas.
+
+3. PERSISTÊNCIA:
+   • Seus adereços ficam salvos permanentemente no seu computador e NÃO são apagados ao atualizar a versão do aplicativo!
