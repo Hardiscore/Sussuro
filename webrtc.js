@@ -154,7 +154,7 @@ export class TavernWebRTC {
     this.highpassFilter = null;
 
     // Versão do Cliente e Compatibilidade Estrita
-    this.appVersion = options.appVersion || '1.1.0';
+    this.appVersion = options.appVersion || '1.1.1';
     this.userInfo.appVersion = this.appVersion;
 
     // Callbacks do UI

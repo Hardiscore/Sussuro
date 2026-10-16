@@ -282,7 +282,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.1.0';
+export const APP_VERSION = '1.1.1';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -3803,14 +3803,73 @@ function setNoiseSuppressionMode(mode) {
 function setupSettingsModal() {
   const modal = document.getElementById('settings-modal');
   const btnClose = document.getElementById('btn-close-settings-modal');
+  const btnToggleFullscreen = document.getElementById('btn-toggle-settings-fullscreen');
+  const settingsWindow = modal.querySelector('.settings-window');
   const navItems = modal.querySelectorAll('.settings-nav-item');
   const tabPanes = modal.querySelectorAll('.settings-tab-pane');
 
   btnClose.onclick = closeSettingsModal;
 
+  function updateFullscreenIcon(isFs) {
+    const iconEl = document.getElementById('settings-fullscreen-icon');
+    if (iconEl) {
+      if (isFs) {
+        // Ícone de restaurar / sair de tela cheia
+        iconEl.innerHTML = '<path d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"/>';
+        btnToggleFullscreen?.setAttribute('title', 'Restaurar Janela Padrão (F11)');
+      } else {
+        // Ícone de expandir para tela cheia
+        iconEl.innerHTML = '<path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>';
+        btnToggleFullscreen?.setAttribute('title', 'Alternar Tela Cheia (F11)');
+      }
+    }
+  }
+
+  function toggleSettingsFullscreen() {
+    if (!settingsWindow) return;
+    const isFs = settingsWindow.classList.toggle('is-fullscreen');
+    btnToggleFullscreen?.classList.toggle('is-active', isFs);
+    updateFullscreenIcon(isFs);
+
+    try {
+      localStorage.setItem('sussurro_settings_fullscreen', isFs ? 'true' : 'false');
+    } catch (e) {}
+  }
+
+  if (btnToggleFullscreen) {
+    btnToggleFullscreen.onclick = (e) => {
+      e.stopPropagation();
+      toggleSettingsFullscreen();
+    };
+  }
+
+  // Atalho de duplo clique no cabeçalho da barra lateral para alternar tela cheia
+  const sidebarHeader = modal.querySelector('.settings-sidebar-header');
+  if (sidebarHeader) {
+    sidebarHeader.style.cursor = 'pointer';
+    sidebarHeader.title = 'Duplo clique para alternar Tela Cheia';
+    sidebarHeader.ondblclick = toggleSettingsFullscreen;
+  }
+
+  // Restaura preferência salva de tela cheia
+  try {
+    const savedFs = localStorage.getItem('sussurro_settings_fullscreen');
+    if (savedFs === 'true' && settingsWindow) {
+      settingsWindow.classList.add('is-fullscreen');
+      btnToggleFullscreen?.classList.add('is-active');
+      updateFullscreenIcon(true);
+    }
+  } catch (e) {}
+
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !modal.classList.contains('hidden')) {
       closeSettingsModal();
+    }
+
+    // Atalho F11 quando o modal estiver aberto para alternar modo tela cheia
+    if (e.key === 'F11' && !modal.classList.contains('hidden')) {
+      e.preventDefault();
+      toggleSettingsFullscreen();
     }
 
     // Atalho secreto Ctrl+Shift+C para desocultar a aba de Rede e Conexão caso necessário
@@ -5338,11 +5397,16 @@ function setupPwaAndOfflineSupport() {
       return;
     }
 
-    const isMobileDevice = /android|iphone|ipad|ipod/i.test(navigator.userAgent || '');
+    const isMobileDevice = /android|iphone|ipad|ipod|mobile/i.test(navigator.userAgent || '') ||
+                           (window.innerWidth <= 768) ||
+                           (window.matchMedia && window.matchMedia('(max-width: 768px)').matches) ||
+                           ('ontouchstart' in window && window.innerWidth <= 850);
 
-    // Exibe o card de download do .EXE de Windows para quem abre o site pelo navegador (PC ou para compartilhar)
-    if (!isStandalonePwa() && windowsDownloadCard) {
+    // Exibe o card de download do .EXE de Windows EXCLUSIVAMENTE para computadores/PC Desktop via navegador
+    if (!isStandalonePwa() && !isMobileDevice && windowsDownloadCard) {
       windowsDownloadCard.classList.remove('hidden');
+    } else {
+      windowsDownloadCard?.classList.add('hidden');
     }
 
     if (isStandalonePwa()) {

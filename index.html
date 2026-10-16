@@ -91,7 +91,7 @@
             <div class="pwa-install-banner-info">
               <div class="pwa-install-icon">📲</div>
               <div>
-                <div class="pwa-install-title">Instalar Sussurro RPG como App (v1.1.0)</div>
+                <div class="pwa-install-title">Instalar Sussurro RPG como App (v1.1.1)</div>
                 <div class="pwa-install-sub">Roda em tela cheia, atualiza sozinho e mantém sua voz ativa em 2º plano. Se o Android exibir aviso do Play Protect, toque em <strong>"Instalar assim mesmo"</strong>.</div>
               </div>
             </div>
@@ -545,6 +545,11 @@
 
       <!-- Conteúdo das Abas -->
       <div class="settings-content">
+        <button class="settings-fullscreen-btn" id="btn-toggle-settings-fullscreen" title="Alternar Tela Cheia (F11)">
+          <svg id="settings-fullscreen-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"/>
+          </svg>
+        </button>
         <button class="settings-close-btn" id="btn-close-settings-modal" title="Fechar (ESC)">✕</button>
 
         <!-- ABA 1: DISPOSITIVOS E ATALHOS (VOZ E VÍDEO) -->
@@ -733,280 +738,282 @@
         <div class="settings-tab-pane" id="tab-filters">
           <h2 class="settings-section-title">Efeitos & Acessórios</h2>
 
-          <!-- 1. PLANOS DE FUNDO -->
-          <div class="ice-card" style="margin-top: 14px;">
-            <div class="ice-card-header">
-              <span class="ice-title">Planos de Fundo</span>
-              <button type="button" class="btn btn-secondary" id="btn-reload-backgrounds-folder" style="font-size: 11px; padding: 3px 8px;" title="Atualizar imagens da pasta public/backgrounds">
-                <span>🔄 Atualizar da Pasta</span>
-              </button>
-            </div>
-
-            <div class="background-cards-grid" id="background-cards-grid">
-              <div class="bg-preset-card active" data-bg="none">
-                <div class="bg-preset-thumb bg-preset-none">🚫</div>
-                <span class="bg-preset-label">Natural</span>
-              </div>
-              <div class="bg-preset-card" data-bg="blur">
-                <div class="bg-preset-thumb bg-preset-blur">💧</div>
-                <span class="bg-preset-label">Desfocado</span>
-              </div>
-              <div class="bg-preset-card" data-bg="tavern">
-                <div class="bg-preset-thumb bg-preset-tavern">🍺</div>
-                <span class="bg-preset-label">Taverna</span>
-              </div>
-              <div class="bg-preset-card" data-bg="dungeon">
-                <div class="bg-preset-thumb bg-preset-dungeon">🗝️</div>
-                <span class="bg-preset-label">Masmorra</span>
-              </div>
-              <div class="bg-preset-card" data-bg="forest">
-                <div class="bg-preset-thumb bg-preset-forest">🌲</div>
-                <span class="bg-preset-label">Floresta</span>
-              </div>
-              <div class="bg-preset-card" data-bg="library">
-                <div class="bg-preset-thumb bg-preset-library">📜</div>
-                <span class="bg-preset-label">Biblioteca</span>
-              </div>
-            </div>
-
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.06);">
-              <span style="font-size: 11.5px; color: var(--text-muted);">
-                📁 Pasta no computador: <code style="color: var(--accent-blurple); background: rgba(0,0,0,0.3); padding: 2px 5px; border-radius: 3px;">public/backgrounds</code>
-              </span>
-              <div style="display: flex; gap: 6px;">
-                <label class="btn btn-primary" style="font-size: 11.5px; padding: 5px 10px; cursor: pointer;">
-                  <span>🌄 Enviar Novo Cenário</span>
-                  <input type="file" id="input-upload-bg" accept="image/jpeg,image/png,image/webp" style="display: none;" />
-                </label>
-                <button type="button" class="btn btn-secondary hidden" id="btn-remove-custom-bg" style="font-size: 11.5px; padding: 5px 8px;">✕</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- 2. CÂMERA (LOCALIZADA ENTRE PLANOS DE FUNDO E ACESSÓRIOS) -->
-          <div class="ice-card" style="margin-top: 14px; background: rgba(17, 18, 20, 0.7); border: 1px solid rgba(88, 101, 242, 0.35);">
-            <div class="ice-card-header">
-              <span class="ice-title">Câmera</span>
-              <div style="display: flex; align-items: center; gap: 8px;">
-                <span id="filters-cam-status-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.15); color: var(--accent-blurple);">Desativada</span>
-                <button type="button" class="btn btn-primary" id="btn-toggle-filters-cam" style="font-size: 11px; padding: 4px 10px;">
-                  <span id="btn-toggle-filters-cam-text">▶️ Ligar Câmera na Prévia</span>
-                </button>
-              </div>
-            </div>
-
-            <div class="filters-camera-preview-box" id="filters-camera-preview-container">
-              <video id="filters-preview-video" playsinline muted autoplay style="display: none;"></video>
-              <canvas id="filters-preview-canvas" class="tile-video-canvas hidden"></canvas>
-              <div class="avatar-fallback" id="filters-preview-avatar-fallback" style="display: none;">
-                <img id="filters-preview-avatar-img" class="avatar-pngtuber-img" src="" alt="Avatar" style="display: none;" />
-              </div>
-              <div id="filters-preview-accessory" class="tile-accessory-overlay hidden"></div>
-              <div id="filters-atmosphere-overlay" class="atmosphere-overlay hidden"></div>
-
-              <div id="filters-preview-placeholder" class="filters-preview-placeholder">
-                <div style="font-size: 38px; opacity: 0.85;">📷</div>
-                <div style="font-weight: 700; font-size: 13px; color: var(--text-bright);">Prévia de Câmera Desligada</div>
-                <div style="font-size: 11.5px; max-width: 340px; line-height: 1.4; color: var(--text-muted);">
-                  Clique em <strong>"Ligar Câmera na Prévia"</strong> acima para visualizar os cenários e acessórios em tempo real.
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 3. ACESSÓRIOS -->
-          <div class="ice-card" style="margin-top: 14px;">
-            <div class="ice-card-header">
-              <span class="ice-title">Acessórios</span>
-              <button type="button" class="btn btn-secondary" id="btn-reload-accessories-folder" style="font-size: 11px; padding: 3px 8px;" title="Atualizar imagens da pasta public/accessories">
-                <span>🔄 Atualizar da Pasta</span>
-              </button>
-            </div>
-
-            <div class="accessory-cards-grid" id="accessory-cards-grid">
-              <div class="acc-card active" data-acc="none">
-                <span class="acc-card-icon">🚫</span>
-                <span class="acc-card-label">Nenhum</span>
-              </div>
-              <div class="acc-card" data-acc="crown">
-                <span class="acc-card-icon">👑</span>
-                <span class="acc-card-label">Coroa GM</span>
-              </div>
-              <div class="acc-card" data-acc="wizard">
-                <span class="acc-card-icon">🧙‍♂️</span>
-                <span class="acc-card-label">Mago</span>
-              </div>
-              <div class="acc-card" data-acc="helm">
-                <span class="acc-card-icon">🪖</span>
-                <span class="acc-card-label">Elmo</span>
-              </div>
-              <div class="acc-card" data-acc="horns">
-                <span class="acc-card-icon">😈</span>
-                <span class="acc-card-label">Chifres</span>
-              </div>
-              <div class="acc-card" data-acc="eyepatch">
-                <span class="acc-card-icon">🏴‍☠️</span>
-                <span class="acc-card-label">Tapa-olho</span>
-              </div>
-              <div class="acc-card" data-acc="elf">
-                <span class="acc-card-icon">🧝</span>
-                <span class="acc-card-label">Orelhas Elfo</span>
-              </div>
-              <div class="acc-card" data-acc="eyes">
-                <span class="acc-card-icon">✨</span>
-                <span class="acc-card-label">Olhos Mágicos</span>
-              </div>
-              <div class="acc-card" data-acc="mask">
-                <span class="acc-card-icon">🥷</span>
-                <span class="acc-card-label">Máscara</span>
-              </div>
-              <div class="acc-card" data-acc="beard">
-                <span class="acc-card-icon">🧔</span>
-                <span class="acc-card-label">Barba Anão</span>
-              </div>
-              <div class="acc-card" data-acc="wings">
-                <span class="acc-card-icon">🪽</span>
-                <span class="acc-card-label">Asas Astrais</span>
-              </div>
-              <div class="acc-card" data-acc="pet">
-                <span class="acc-card-icon">🐉</span>
-                <span class="acc-card-label">Dragãozinho</span>
-              </div>
-              <div class="acc-card hidden" data-acc="custom" id="acc-card-custom">
-                <span class="acc-card-icon">📁</span>
-                <span class="acc-card-label">Meu Item</span>
-              </div>
-            </div>
-
-            <!-- Controles de Posição e Escala do Acessório Customizado com mais margem -->
-            <div id="accessory-adjust-panel" class="accessory-adjust-panel" style="margin-top: 12px; padding: 10px;">
-              <div style="font-size: 11px; font-weight: 700; color: var(--accent-gold); text-transform: uppercase; margin-bottom: 6px;">
-                🎯 Ponto de Fixação (Âncora):
-              </div>
-              <div class="accessory-anchor-buttons" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px;">
-                <button type="button" class="btn-acc-anchor active" data-anchor="head" title="Topo da cabeça / Chapéus e Coroas">👑 Chapéu / Topo</button>
-                <button type="button" class="btn-acc-anchor" data-anchor="eyes" title="Rosto / Óculos e Tapa-olhos">👓 Olhos / Rosto</button>
-                <button type="button" class="btn-acc-anchor" data-anchor="mouth" title="Boca e Queixo / Máscaras e Barbas">🧔 Boca / Queixo</button>
-                <button type="button" class="btn-acc-anchor" data-anchor="chest" title="Base / Peito e Ombros">🛡️ Peito / Ombro</button>
-                <button type="button" class="btn-acc-anchor" data-anchor="side" title="Lateral / Mascotes e Asas">🐉 Mascote Lateral</button>
-              </div>
-
-              <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; font-size: 12px;">
-                <div>
-                  <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <label class="form-label" style="font-size: 10.5px; margin: 0;">Tamanho (Zoom)</label>
-                    <span id="label-acc-scale" style="font-size: 10.5px; color: var(--accent-gold); font-weight: bold;">100%</span>
-                  </div>
-                  <input type="range" id="slider-acc-scale" min="20" max="350" value="100" class="tile-volume-slider" style="margin-top: 4px;" />
-                </div>
-                <div>
-                  <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <label class="form-label" style="font-size: 10.5px; margin: 0;">Posição Vertical (Y)</label>
-                    <span id="label-acc-posy" style="font-size: 10.5px; color: var(--accent-gold); font-weight: bold;">-35%</span>
-                  </div>
-                  <input type="range" id="slider-acc-posy" min="-200" max="200" value="-35" class="tile-volume-slider" style="margin-top: 4px;" />
-                </div>
-                <div>
-                  <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <label class="form-label" style="font-size: 10.5px; margin: 0;">Posição Horizontal (X)</label>
-                    <span id="label-acc-posx" style="font-size: 10.5px; color: var(--accent-gold); font-weight: bold;">0%</span>
-                  </div>
-                  <input type="range" id="slider-acc-posx" min="-150" max="150" value="0" class="tile-volume-slider" style="margin-top: 4px;" />
-                </div>
-              </div>
-
-              <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.06); font-size: 11px;">
-                <span style="color: var(--accent-green);">💾 Posição salva automaticamente</span>
-                <button type="button" class="btn btn-secondary" id="btn-reset-acc-pos" style="font-size: 10.5px; padding: 3px 8px;">
-                  <span>Restaurar Padrão</span>
-                </button>
-              </div>
-            </div>
-
-            <!-- Upload de Acessório Próprio -->
-            <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.06);">
-              <span style="font-size: 11.5px; color: var(--text-muted);">
-                📁 Pasta no computador: <code style="color: var(--accent-gold); background: rgba(0,0,0,0.3); padding: 2px 5px; border-radius: 3px;">public/accessories</code>
-              </span>
-              <div style="display: flex; gap: 6px;">
-                <label class="btn btn-primary" style="font-size: 11.5px; padding: 5px 10px; cursor: pointer;">
-                  <span>🎩 Enviar Novo Item (.png)</span>
-                  <input type="file" id="input-upload-accessory" accept="image/png,image/webp" style="display: none;" />
-                </label>
-                <button type="button" class="btn btn-secondary hidden" id="btn-remove-custom-acc" style="font-size: 11.5px; padding: 5px 8px;">✕</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- 4. AVATAR REATIVO (PNGTUBER) -->
-          <div class="ice-card" style="margin-top: 14px;">
-            <div class="ice-card-header">
-              <span class="ice-title">Avatar Reativo (PNGTuber)</span>
-            </div>
-
-            <div style="display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: center;">
-              <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
-                <div id="pngtuber-preview-container" class="pngtuber-preview-box">
-                  <img id="pngtuber-preview-img" src="" alt="Avatar" style="display: none;" />
-                  <div id="pngtuber-placeholder" style="font-size: 32px;">⚔️</div>
-                  <div id="pngtuber-preview-accessory" class="tile-accessory-overlay hidden"></div>
-                </div>
-                <button type="button" class="btn btn-secondary" id="btn-test-pngtuber-voice" style="font-size: 10.5px; padding: 3px 8px; border-radius: 4px;">
-                  <span>🎙️ Testar Fala</span>
+          <div class="filters-tab-grid">
+            <!-- 1. PLANOS DE FUNDO -->
+            <div class="ice-card filters-section-bg" style="margin-top: 14px;">
+              <div class="ice-card-header">
+                <span class="ice-title">Planos de Fundo</span>
+                <button type="button" class="btn btn-secondary" id="btn-reload-backgrounds-folder" style="font-size: 11px; padding: 3px 8px;" title="Atualizar imagens da pasta public/backgrounds">
+                  <span>🔄 Atualizar da Pasta</span>
                 </button>
               </div>
 
-              <div>
-                <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
-                  <label class="btn btn-primary" style="font-size: 12px; padding: 6px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;">
-                    <span>📁 Imagem do Personagem</span>
-                    <input type="file" id="input-upload-avatar" accept="image/png,image/jpeg,image/webp" style="display: none;" />
+              <div class="background-cards-grid" id="background-cards-grid">
+                <div class="bg-preset-card active" data-bg="none">
+                  <div class="bg-preset-thumb bg-preset-none">🚫</div>
+                  <span class="bg-preset-label">Natural</span>
+                </div>
+                <div class="bg-preset-card" data-bg="blur">
+                  <div class="bg-preset-thumb bg-preset-blur">💧</div>
+                  <span class="bg-preset-label">Desfocado</span>
+                </div>
+                <div class="bg-preset-card" data-bg="tavern">
+                  <div class="bg-preset-thumb bg-preset-tavern">🍺</div>
+                  <span class="bg-preset-label">Taverna</span>
+                </div>
+                <div class="bg-preset-card" data-bg="dungeon">
+                  <div class="bg-preset-thumb bg-preset-dungeon">🗝️</div>
+                  <span class="bg-preset-label">Masmorra</span>
+                </div>
+                <div class="bg-preset-card" data-bg="forest">
+                  <div class="bg-preset-thumb bg-preset-forest">🌲</div>
+                  <span class="bg-preset-label">Floresta</span>
+                </div>
+                <div class="bg-preset-card" data-bg="library">
+                  <div class="bg-preset-thumb bg-preset-library">📜</div>
+                  <span class="bg-preset-label">Biblioteca</span>
+                </div>
+              </div>
+
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.06);">
+                <span style="font-size: 11.5px; color: var(--text-muted);">
+                  📁 Pasta no computador: <code style="color: var(--accent-blurple); background: rgba(0,0,0,0.3); padding: 2px 5px; border-radius: 3px;">public/backgrounds</code>
+                </span>
+                <div style="display: flex; gap: 6px;">
+                  <label class="btn btn-primary" style="font-size: 11.5px; padding: 5px 10px; cursor: pointer;">
+                    <span>🌄 Enviar Novo Cenário</span>
+                    <input type="file" id="input-upload-bg" accept="image/jpeg,image/png,image/webp" style="display: none;" />
                   </label>
-                  <button type="button" class="btn btn-secondary" id="btn-remove-custom-avatar" style="font-size: 12px; padding: 6px 12px;">
-                    <span>Remover</span>
+                  <button type="button" class="btn btn-secondary hidden" id="btn-remove-custom-bg" style="font-size: 11.5px; padding: 5px 8px;">✕</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- 2. CÂMERA (ENTRE PLANOS DE FUNDO E ACESSÓRIOS NO MODO NORMAL, OU NA LATERAL EM TELA CHEIA) -->
+            <div class="ice-card filters-section-cam" id="filters-camera-card" style="margin-top: 14px; background: rgba(17, 18, 20, 0.7); border: 1px solid rgba(88, 101, 242, 0.35);">
+              <div class="ice-card-header">
+                <span class="ice-title">Câmera</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span id="filters-cam-status-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.15); color: var(--accent-blurple);">Desativada</span>
+                  <button type="button" class="btn btn-primary" id="btn-toggle-filters-cam" style="font-size: 11px; padding: 4px 10px;">
+                    <span id="btn-toggle-filters-cam-text">▶️ Ligar Câmera na Prévia</span>
                   </button>
                 </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px;">
-                  <label class="role-option" style="cursor: pointer; font-size: 12px;">
-                    <input type="checkbox" id="check-pngtuber-bounce" checked style="accent-color: var(--accent-blurple);" />
-                    <span>Pulinho ao falar</span>
-                  </label>
-                  <label class="role-option" style="cursor: pointer; font-size: 12px;">
-                    <input type="checkbox" id="check-pngtuber-glow" checked style="accent-color: var(--accent-blurple);" />
-                    <span>Aura brilhante na voz</span>
-                  </label>
+              </div>
+
+              <div class="filters-camera-preview-box" id="filters-camera-preview-container">
+                <video id="filters-preview-video" playsinline muted autoplay style="display: none;"></video>
+                <canvas id="filters-preview-canvas" class="tile-video-canvas hidden"></canvas>
+                <div class="avatar-fallback" id="filters-preview-avatar-fallback" style="display: none;">
+                  <img id="filters-preview-avatar-img" class="avatar-pngtuber-img" src="" alt="Avatar" style="display: none;" />
+                </div>
+                <div id="filters-preview-accessory" class="tile-accessory-overlay hidden"></div>
+                <div id="filters-atmosphere-overlay" class="atmosphere-overlay hidden"></div>
+
+                <div id="filters-preview-placeholder" class="filters-preview-placeholder">
+                  <div style="font-size: 38px; opacity: 0.85;">📷</div>
+                  <div style="font-weight: 700; font-size: 13px; color: var(--text-bright);">Prévia de Câmera Desligada</div>
+                  <div style="font-size: 11.5px; max-width: 340px; line-height: 1.4; color: var(--text-muted);">
+                    Clique em <strong>"Ligar Câmera na Prévia"</strong> acima para visualizar os cenários e acessórios em tempo real.
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          <!-- 5. FILTROS DE ILUMINAÇÃO & CLIMA -->
-          <div class="ice-card" style="margin-top: 14px;">
-            <div class="ice-card-header">
-              <span class="ice-title">Iluminação da Mesa</span>
+            <!-- 3. ACESSÓRIOS -->
+            <div class="ice-card filters-section-acc" style="margin-top: 14px;">
+              <div class="ice-card-header">
+                <span class="ice-title">Acessórios</span>
+                <button type="button" class="btn btn-secondary" id="btn-reload-accessories-folder" style="font-size: 11px; padding: 3px 8px;" title="Atualizar imagens da pasta public/accessories">
+                  <span>🔄 Atualizar da Pasta</span>
+                </button>
+              </div>
+
+              <div class="accessory-cards-grid" id="accessory-cards-grid">
+                <div class="acc-card active" data-acc="none">
+                  <span class="acc-card-icon">🚫</span>
+                  <span class="acc-card-label">Nenhum</span>
+                </div>
+                <div class="acc-card" data-acc="crown">
+                  <span class="acc-card-icon">👑</span>
+                  <span class="acc-card-label">Coroa GM</span>
+                </div>
+                <div class="acc-card" data-acc="wizard">
+                  <span class="acc-card-icon">🧙‍♂️</span>
+                  <span class="acc-card-label">Mago</span>
+                </div>
+                <div class="acc-card" data-acc="helm">
+                  <span class="acc-card-icon">🪖</span>
+                  <span class="acc-card-label">Elmo</span>
+                </div>
+                <div class="acc-card" data-acc="horns">
+                  <span class="acc-card-icon">😈</span>
+                  <span class="acc-card-label">Chifres</span>
+                </div>
+                <div class="acc-card" data-acc="eyepatch">
+                  <span class="acc-card-icon">🏴‍☠️</span>
+                  <span class="acc-card-label">Tapa-olho</span>
+                </div>
+                <div class="acc-card" data-acc="elf">
+                  <span class="acc-card-icon">🧝</span>
+                  <span class="acc-card-label">Orelhas Elfo</span>
+                </div>
+                <div class="acc-card" data-acc="eyes">
+                  <span class="acc-card-icon">✨</span>
+                  <span class="acc-card-label">Olhos Mágicos</span>
+                </div>
+                <div class="acc-card" data-acc="mask">
+                  <span class="acc-card-icon">🥷</span>
+                  <span class="acc-card-label">Máscara</span>
+                </div>
+                <div class="acc-card" data-acc="beard">
+                  <span class="acc-card-icon">🧔</span>
+                  <span class="acc-card-label">Barba Anão</span>
+                </div>
+                <div class="acc-card" data-acc="wings">
+                  <span class="acc-card-icon">🪽</span>
+                  <span class="acc-card-label">Asas Astrais</span>
+                </div>
+                <div class="acc-card" data-acc="pet">
+                  <span class="acc-card-icon">🐉</span>
+                  <span class="acc-card-label">Dragãozinho</span>
+                </div>
+                <div class="acc-card hidden" data-acc="custom" id="acc-card-custom">
+                  <span class="acc-card-icon">📁</span>
+                  <span class="acc-card-label">Meu Item</span>
+                </div>
+              </div>
+
+              <!-- Controles de Posição e Escala do Acessório Customizado com mais margem -->
+              <div id="accessory-adjust-panel" class="accessory-adjust-panel" style="margin-top: 12px; padding: 10px;">
+                <div style="font-size: 11px; font-weight: 700; color: var(--accent-gold); text-transform: uppercase; margin-bottom: 6px;">
+                  🎯 Ponto de Fixação (Âncora):
+                </div>
+                <div class="accessory-anchor-buttons" style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px;">
+                  <button type="button" class="btn-acc-anchor active" data-anchor="head" title="Topo da cabeça / Chapéus e Coroas">👑 Chapéu / Topo</button>
+                  <button type="button" class="btn-acc-anchor" data-anchor="eyes" title="Rosto / Óculos e Tapa-olhos">👓 Olhos / Rosto</button>
+                  <button type="button" class="btn-acc-anchor" data-anchor="mouth" title="Boca e Queixo / Máscaras e Barbas">🧔 Boca / Queixo</button>
+                  <button type="button" class="btn-acc-anchor" data-anchor="chest" title="Base / Peito e Ombros">🛡️ Peito / Ombro</button>
+                  <button type="button" class="btn-acc-anchor" data-anchor="side" title="Lateral / Mascotes e Asas">🐉 Mascote Lateral</button>
+                </div>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; font-size: 12px;">
+                  <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <label class="form-label" style="font-size: 10.5px; margin: 0;">Tamanho (Zoom)</label>
+                      <span id="label-acc-scale" style="font-size: 10.5px; color: var(--accent-gold); font-weight: bold;">100%</span>
+                    </div>
+                    <input type="range" id="slider-acc-scale" min="20" max="350" value="100" class="tile-volume-slider" style="margin-top: 4px;" />
+                  </div>
+                  <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <label class="form-label" style="font-size: 10.5px; margin: 0;">Posição Vertical (Y)</label>
+                      <span id="label-acc-posy" style="font-size: 10.5px; color: var(--accent-gold); font-weight: bold;">-35%</span>
+                    </div>
+                    <input type="range" id="slider-acc-posy" min="-200" max="200" value="-35" class="tile-volume-slider" style="margin-top: 4px;" />
+                  </div>
+                  <div>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                      <label class="form-label" style="font-size: 10.5px; margin: 0;">Posição Horizontal (X)</label>
+                      <span id="label-acc-posx" style="font-size: 10.5px; color: var(--accent-gold); font-weight: bold;">0%</span>
+                    </div>
+                    <input type="range" id="slider-acc-posx" min="-150" max="150" value="0" class="tile-volume-slider" style="margin-top: 4px;" />
+                  </div>
+                </div>
+
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255, 255, 255, 0.06); font-size: 11px;">
+                  <span style="color: var(--accent-green);">💾 Posição salva automaticamente</span>
+                  <button type="button" class="btn btn-secondary" id="btn-reset-acc-pos" style="font-size: 10.5px; padding: 3px 8px;">
+                    <span>Restaurar Padrão</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Upload de Acessório Próprio -->
+              <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; padding-top: 10px; border-top: 1px solid rgba(255, 255, 255, 0.06);">
+                <span style="font-size: 11.5px; color: var(--text-muted);">
+                  📁 Pasta no computador: <code style="color: var(--accent-gold); background: rgba(0,0,0,0.3); padding: 2px 5px; border-radius: 3px;">public/accessories</code>
+                </span>
+                <div style="display: flex; gap: 6px;">
+                  <label class="btn btn-primary" style="font-size: 11.5px; padding: 5px 10px; cursor: pointer;">
+                    <span>🎩 Enviar Novo Item (.png)</span>
+                    <input type="file" id="input-upload-accessory" accept="image/png,image/webp" style="display: none;" />
+                  </label>
+                  <button type="button" class="btn btn-secondary hidden" id="btn-remove-custom-acc" style="font-size: 11.5px; padding: 5px 8px;">✕</button>
+                </div>
+              </div>
             </div>
 
-            <div class="color-filter-cards" id="color-filter-cards" style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;">
-              <button type="button" class="btn-color-filter active" data-filter="none">
-                <span>🚫</span>
-                <span>Normal</span>
-              </button>
-              <button type="button" class="btn-color-filter" data-filter="campfire">
-                <span>🔥</span>
-                <span>Fogueira</span>
-              </button>
-              <button type="button" class="btn-color-filter" data-filter="dungeon-shadow">
-                <span>🌑</span>
-                <span>Sombrio</span>
-              </button>
-              <button type="button" class="btn-color-filter" data-filter="parchment">
-                <span>📜</span>
-                <span>Pergaminho</span>
-              </button>
-              <button type="button" class="btn-color-filter" data-filter="arcane-night">
-                <span>🌌</span>
-                <span>Arcano</span>
-              </button>
+            <!-- 4. AVATAR REATIVO (PNGTUBER) -->
+            <div class="ice-card filters-section-avatar" style="margin-top: 14px;">
+              <div class="ice-card-header">
+                <span class="ice-title">Avatar Reativo (PNGTuber)</span>
+              </div>
+
+              <div style="display: grid; grid-template-columns: auto 1fr; gap: 16px; align-items: center;">
+                <div style="display: flex; flex-direction: column; align-items: center; gap: 6px;">
+                  <div id="pngtuber-preview-container" class="pngtuber-preview-box">
+                    <img id="pngtuber-preview-img" src="" alt="Avatar" style="display: none;" />
+                    <div id="pngtuber-placeholder" style="font-size: 32px;">⚔️</div>
+                    <div id="pngtuber-preview-accessory" class="tile-accessory-overlay hidden"></div>
+                  </div>
+                  <button type="button" class="btn btn-secondary" id="btn-test-pngtuber-voice" style="font-size: 10.5px; padding: 3px 8px; border-radius: 4px;">
+                    <span>🎙️ Testar Fala</span>
+                  </button>
+                </div>
+
+                <div>
+                  <div style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px;">
+                    <label class="btn btn-primary" style="font-size: 12px; padding: 6px 12px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;">
+                      <span>📁 Imagem do Personagem</span>
+                      <input type="file" id="input-upload-avatar" accept="image/png,image/jpeg,image/webp" style="display: none;" />
+                    </label>
+                    <button type="button" class="btn btn-secondary" id="btn-remove-custom-avatar" style="font-size: 12px; padding: 6px 12px;">
+                      <span>Remover</span>
+                    </button>
+                  </div>
+                  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 6px;">
+                    <label class="role-option" style="cursor: pointer; font-size: 12px;">
+                      <input type="checkbox" id="check-pngtuber-bounce" checked style="accent-color: var(--accent-blurple);" />
+                      <span>Pulinho ao falar</span>
+                    </label>
+                    <label class="role-option" style="cursor: pointer; font-size: 12px;">
+                      <input type="checkbox" id="check-pngtuber-glow" checked style="accent-color: var(--accent-blurple);" />
+                      <span>Aura brilhante na voz</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 5. FILTROS DE ILUMINAÇÃO & CLIMA -->
+            <div class="ice-card filters-section-lighting" style="margin-top: 14px;">
+              <div class="ice-card-header">
+                <span class="ice-title">Iluminação da Mesa</span>
+              </div>
+
+              <div class="color-filter-cards" id="color-filter-cards" style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px;">
+                <button type="button" class="btn-color-filter active" data-filter="none">
+                  <span>🚫</span>
+                  <span>Normal</span>
+                </button>
+                <button type="button" class="btn-color-filter" data-filter="campfire">
+                  <span>🔥</span>
+                  <span>Fogueira</span>
+                </button>
+                <button type="button" class="btn-color-filter" data-filter="dungeon-shadow">
+                  <span>🌑</span>
+                  <span>Sombrio</span>
+                </button>
+                <button type="button" class="btn-color-filter" data-filter="parchment">
+                  <span>📜</span>
+                  <span>Pergaminho</span>
+                </button>
+                <button type="button" class="btn-color-filter" data-filter="arcane-night">
+                  <span>🌌</span>
+                  <span>Arcano</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1104,10 +1111,10 @@
                 <div>
                   <div style="font-weight: 700; font-size: 16px; color: var(--text-normal); display: flex; align-items: center; gap: 8px;">
                     <span>Sussurro RPG</span>
-                    <span id="version-pill-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple); font-size: 11px;">v1.1.0</span>
+                    <span id="version-pill-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple); font-size: 11px;">v1.1.1</span>
                   </div>
                   <div style="font-size: 13px; color: var(--text-muted); margin-top: 2px;" id="version-current-text">
-                    Versão atual: <strong>v1.1.0</strong>
+                    Versão atual: <strong>v1.1.1</strong>
                   </div>
                 </div>
               </div>
@@ -1124,7 +1131,7 @@
               </div>
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span>Quando foi atualizado:</span>
-                <strong style="color: var(--accent-gold);" id="version-updated-at">09/10/2026</strong>
+                <strong style="color: var(--accent-gold);" id="version-updated-at">15/10/2026</strong>
               </div>
               <div style="display: flex; justify-content: space-between; align-items: center;">
                 <span>Canal de Lançamento:</span>
@@ -1256,11 +1263,11 @@
         <div class="version-compare-card">
           <div class="version-compare-row">
             <span class="version-label" style="font-size: 12px; color: var(--text-muted);">Sua versão instalada:</span>
-            <span class="version-badge your-ver" id="mismatch-your-version">v1.1.0</span>
+            <span class="version-badge your-ver" id="mismatch-your-version">v1.1.1</span>
           </div>
           <div class="version-compare-row">
             <span class="version-label" style="font-size: 12px; color: var(--text-muted);">Versão requerida na chamada:</span>
-            <span class="version-badge room-ver" id="mismatch-room-version">v1.1.0</span>
+            <span class="version-badge room-ver" id="mismatch-room-version">v1.1.1</span>
           </div>
         </div>
         <p class="warning-help-text">

@@ -1407,15 +1407,39 @@ main#app-container > section#lobby-screen .lobby-subtitle,
 }
 
 .settings-window {
-  width: 90%;
-  max-width: 860px;
-  height: 600px;
+  width: 92%;
+  max-width: 960px;
+  height: 680px;
+  max-height: 90vh;
   background: var(--bg-app);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
   display: flex;
   overflow: hidden;
   box-shadow: var(--shadow-elevation-high);
+  transition: width 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+              height 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+              max-width 0.22s cubic-bezier(0.16, 1, 0.3, 1),
+              max-height 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Modo Tela Cheia: preenche a tela proporcionando visão ampla */
+.settings-window.is-fullscreen {
+  width: 98vw !important;
+  max-width: 1680px !important;
+  height: 96vh !important;
+  max-height: 98vh !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: 0 0 60px rgba(0, 0, 0, 0.85), 0 0 0 1px rgba(88, 101, 242, 0.45) !important;
+}
+
+.settings-window.is-fullscreen .settings-sidebar {
+  width: 250px !important;
+  flex-shrink: 0;
+}
+
+.settings-window.is-fullscreen .settings-content {
+  padding: 30px 38px 40px !important;
 }
 
 .settings-sidebar {
@@ -1471,6 +1495,37 @@ main#app-container > section#lobby-screen .lobby-subtitle,
   position: relative;
 }
 
+.settings-fullscreen-btn {
+  position: absolute;
+  top: 20px;
+  right: 64px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  z-index: 50;
+}
+
+.settings-fullscreen-btn:hover {
+  background: var(--bg-card-hover);
+  color: var(--text-bright);
+  border-color: var(--accent-blurple);
+}
+
+.settings-fullscreen-btn.is-active {
+  background: rgba(88, 101, 242, 0.25);
+  color: #ffffff;
+  border-color: var(--accent-blurple);
+  box-shadow: 0 0 10px rgba(88, 101, 242, 0.4);
+}
+
 .settings-close-btn {
   position: absolute;
   top: 20px;
@@ -1486,6 +1541,7 @@ main#app-container > section#lobby-screen .lobby-subtitle,
   align-items: center;
   justify-content: center;
   transition: all 0.15s;
+  z-index: 50;
 }
 
 .settings-close-btn:hover {
@@ -2722,11 +2778,32 @@ main#app-container > section#lobby-screen .lobby-subtitle,
     grid-auto-rows: minmax(160px, 1fr);
   }
 
+  /* Oculta terminantemente card de download do app de desktop no celular */
+  .windows-download-banner,
+  #windows-download-lobby-card {
+    display: none !important;
+  }
+
   /* Modal de Configurações adaptado para celular */
   .settings-window {
-    width: 96vw !important;
-    height: 90dvh !important;
+    width: 98vw !important;
+    height: 94dvh !important;
+    max-height: 96dvh !important;
     flex-direction: column !important;
+  }
+
+  .settings-fullscreen-btn {
+    top: 12px;
+    right: 50px;
+    width: 30px;
+    height: 30px;
+  }
+
+  .settings-close-btn {
+    top: 12px;
+    right: 12px;
+    width: 30px;
+    height: 30px;
   }
 
   .settings-sidebar {
@@ -3274,6 +3351,65 @@ video.filter-arcane-night {
   padding: 16px;
   text-align: center;
   z-index: 1;
+}
+
+/* Layout da Aba de Efeitos e Acessórios */
+.filters-tab-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Quando as configurações estão em modo Tela Cheia:
+   A pré-visualização da câmera fica posicionada na lateral das configurações para melhor visualização */
+@media (min-width: 880px) {
+  .settings-window.is-fullscreen .filters-tab-grid {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1.25fr) minmax(360px, 460px) !important;
+    grid-template-areas:
+      "bg     cam"
+      "acc    cam"
+      "avatar cam"
+      "light  cam" !important;
+    column-gap: 24px !important;
+    row-gap: 16px !important;
+    align-items: start !important;
+  }
+
+  .settings-window.is-fullscreen .filters-section-bg {
+    grid-area: bg;
+    margin-top: 0 !important;
+  }
+
+  .settings-window.is-fullscreen .filters-section-cam {
+    grid-area: cam;
+    margin-top: 0 !important;
+    position: sticky !important;
+    top: 0px !important;
+    z-index: 20 !important;
+    border-color: rgba(88, 101, 242, 0.55) !important;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5) !important;
+  }
+
+  .settings-window.is-fullscreen .filters-section-cam .filters-camera-preview-box {
+    height: 350px !important;
+    max-height: 50vh !important;
+  }
+
+  .settings-window.is-fullscreen .filters-section-acc {
+    grid-area: acc;
+    margin-top: 0 !important;
+  }
+
+  .settings-window.is-fullscreen .filters-section-avatar {
+    grid-area: avatar;
+    margin-top: 0 !important;
+  }
+
+  .settings-window.is-fullscreen .filters-section-lighting {
+    grid-area: light;
+    margin-top: 0 !important;
+  }
 }
 
 
