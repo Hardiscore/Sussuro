@@ -70,7 +70,7 @@ export default defineConfig(() => {
                 request.destination === 'document',
               handler: 'NetworkFirst',
               options: {
-                cacheName: 'sussurro-app-shell-v1.1.1',
+                cacheName: 'sussurro-app-shell-v1.1.2',
                 networkTimeoutSeconds: 4,
                 cacheableResponse: {
                   statuses: [0, 200],

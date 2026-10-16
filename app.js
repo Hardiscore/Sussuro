@@ -282,7 +282,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.1.1';
+export const APP_VERSION = '1.1.2';
 
 const savedPrefs = StorageService.getAllPreferences();
 
