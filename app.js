@@ -4883,6 +4883,8 @@ function setupVersionSettingsTab(modal) {
   const btnCheckUpdate = document.getElementById('btn-check-update-manual');
   const btnCheckText = document.getElementById('btn-check-update-text');
   const btnInstallNow = document.getElementById('btn-install-update-now');
+  const btnDirectDownloadExe = document.getElementById('btn-download-direct-exe');
+  const btnForceRefreshWeb = document.getElementById('btn-force-refresh-web');
   const feedbackBox = document.getElementById('version-feedback-box');
   const feedbackIcon = document.getElementById('version-feedback-icon');
   const feedbackMsg = document.getElementById('version-feedback-msg');
@@ -4891,12 +4893,13 @@ function setupVersionSettingsTab(modal) {
   const progressPct = document.getElementById('version-download-pct');
   const progressBar = document.getElementById('version-download-bar');
 
+  const isElectronApp = !!(window.electronAPI && window.electronAPI.isElectron);
   let currentAppVersion = APP_VERSION;
   if (versionPill) versionPill.textContent = `v${currentAppVersion}`;
   if (versionText) versionText.innerHTML = `Versão atual: <strong>v${currentAppVersion}</strong>`;
 
   // Obter versão instalada do Electron
-  if (window.electronAPI && typeof window.electronAPI.getAppVersion === 'function') {
+  if (isElectronApp && typeof window.electronAPI.getAppVersion === 'function') {
     window.electronAPI.getAppVersion().then(info => {
       if (info && info.version) {
         currentAppVersion = info.version;
@@ -4934,47 +4937,119 @@ function setupVersionSettingsTab(modal) {
     btnCheckUpdate.onclick = async () => {
       if (btnCheckText) btnCheckText.textContent = 'procurando...';
       btnCheckUpdate.disabled = true;
-      setFeedback('🔍', 'Conectando ao GitHub Releases para verificar novidades...', 'info');
+      if (progressWrapper) progressWrapper.classList.add('hidden');
+      if (btnDirectDownloadExe) btnDirectDownloadExe.classList.add('hidden');
+      if (btnForceRefreshWeb) btnForceRefreshWeb.classList.add('hidden');
+      setFeedback('🔍', 'Verificando atualizações no GitHub e no servidor...', 'info');
 
-      // Se estiver no Electron, dispara a checagem nativa
-      if (window.electronAPI && typeof window.electronAPI.checkForUpdatesManual === 'function') {
-        window.electronAPI.checkForUpdatesManual();
-      } else {
-        // No modo Web / PWA, verifica imediatamente a versão do servidor Cloud e atualiza o Service Worker
-        const updatedFromServer = await checkPwaAutoUpdate(true);
-        if (updatedFromServer) {
-          setFeedback('🚀', 'Nova versão detectada no servidor! Atualizando aplicativo agora...', 'success');
-          return;
+      // --- MODO WEB / PWA ---
+      if (!isElectronApp) {
+        try {
+          // Consulta versão do servidor
+          const resVersion = await fetch(`/api/version?t=${Date.now()}`, { cache: 'no-store' });
+          let serverVer = currentAppVersion;
+          if (resVersion.ok) {
+            const vData = await resVersion.json();
+            if (vData?.version) serverVer = vData.version;
+          }
+
+          // Consulta versão mais recente no GitHub Releases
+          let latestGhVer = serverVer;
+          let ghPublishedAt = 'Hoje';
+          try {
+            const ghRes = await fetch('https://api.github.com/repos/Hardiscore/Sussuro/releases/latest', {
+              headers: { 'Accept': 'application/vnd.github.v3+json' }
+            });
+            if (ghRes.ok) {
+              const ghData = await ghRes.json();
+              latestGhVer = (ghData.tag_name || ghData.name || '').replace(/^v/, '');
+              if (ghData.published_at) {
+                ghPublishedAt = new Date(ghData.published_at).toLocaleDateString('pt-BR');
+              }
+            }
+          } catch (e) {}
+
+          if (updatedAtText) updatedAtText.textContent = ghPublishedAt;
+
+          const isNewer = compareVersions(latestGhVer, currentAppVersion) > 0 || compareVersions(serverVer, currentAppVersion) > 0;
+          if (isNewer) {
+            const targetVer = compareVersions(latestGhVer, serverVer) > 0 ? latestGhVer : serverVer;
+            setFeedback('🚀', `Nova versão <strong>v${targetVer}</strong> encontrada! Atualizando aplicação Web agora...`, 'success');
+            if (btnForceRefreshWeb) btnForceRefreshWeb.classList.remove('hidden');
+
+            // Limpa caches e Service Worker para carregar a versão nova
+            if ('caches' in window) {
+              const keys = await caches.keys();
+              await Promise.all(keys.map(k => caches.delete(k)));
+            }
+            if ('serviceWorker' in navigator) {
+              const regs = await navigator.serviceWorker.getRegistrations();
+              await Promise.all(regs.map(r => r.unregister()));
+            }
+
+            setTimeout(() => {
+              window.location.href = window.location.origin + window.location.pathname + '?v=' + Date.now();
+            }, 800);
+            return;
+          } else {
+            setFeedback('✅', `O Sussurro Web já está na versão mais recente (<strong>v${currentAppVersion}</strong>).`, 'success');
+            if (btnForceRefreshWeb) btnForceRefreshWeb.classList.remove('hidden');
+          }
+        } catch (webErr) {
+          console.warn('[VersionTab] Erro ao verificar versão web:', webErr);
+          setFeedback('ℹ️', `Versão Web atual: <strong>v${currentAppVersion}</strong>.`, 'info');
+          if (btnForceRefreshWeb) btnForceRefreshWeb.classList.remove('hidden');
+        } finally {
+          setTimeout(() => {
+            if (btnCheckText) btnCheckText.textContent = 'procurar update';
+            btnCheckUpdate.disabled = false;
+          }, 800);
         }
+        return;
       }
 
-      // Verificação direta complementar via API pública do GitHub
+      // --- MODO DESKTOP ELECTRON ---
       try {
-        const response = await fetch('https://api.github.com/repos/Hardiscore/Sussuro/releases/latest', {
+        if (typeof window.electronAPI.checkForUpdatesManual === 'function') {
+          window.electronAPI.checkForUpdatesManual();
+        }
+
+        const ghRes = await fetch('https://api.github.com/repos/Hardiscore/Sussuro/releases/latest', {
           headers: { 'Accept': 'application/vnd.github.v3+json' }
         });
 
-        if (response.ok) {
-          const release = await response.json();
+        if (ghRes.ok) {
+          const release = await ghRes.json();
           const latestTag = (release.tag_name || release.name || '').replace(/^v/, '');
           const releaseDate = release.published_at ? new Date(release.published_at).toLocaleDateString('pt-BR') : 'Hoje';
-          
           if (updatedAtText) updatedAtText.textContent = releaseDate;
 
           const isNewer = compareVersions(latestTag, currentAppVersion) > 0;
-
           if (isNewer) {
-            setFeedback('📦', `Nova versão <strong>v${latestTag}</strong> encontrada no GitHub (Lançada em ${releaseDate})! Baixando instalador...`, 'success');
-            if (progressWrapper) progressWrapper.classList.remove('hidden');
+            const exeAsset = Array.isArray(release.assets) && release.assets.find(a => a.name && a.name.toLowerCase().endsWith('.exe'));
+            const hasLatestYml = Array.isArray(release.assets) && release.assets.some(a => a.name === 'latest.yml');
+
+            if (!exeAsset) {
+              setFeedback('⚠️', `Versão <strong>v${latestTag}</strong> encontrada no GitHub, porém o instalador (.exe e latest.yml) ainda não foi anexado à Release pelo GitHub Actions. Tente novamente em alguns instantes.`, 'warn');
+              if (progressWrapper) progressWrapper.classList.add('hidden');
+            } else {
+              if (btnDirectDownloadExe) {
+                btnDirectDownloadExe.href = exeAsset.browser_download_url;
+                btnDirectDownloadExe.classList.remove('hidden');
+              }
+              if (hasLatestYml) {
+                setFeedback('📦', `Nova versão <strong>v${latestTag}</strong> encontrada no GitHub! Baixando atualização em segundo plano...`, 'info');
+              } else {
+                setFeedback('📦', `Nova versão <strong>v${latestTag}</strong> encontrada no GitHub! Clique no botão abaixo para baixar o instalador oficial:`, 'success');
+              }
+            }
           } else {
-            setFeedback('✅', `Você já está utilizando a versão mais recente (<strong>v${currentAppVersion}</strong>). Nenhuma atualização necessária no momento.`, 'success');
+            setFeedback('✅', `O Sussurro RPG já está atualizado na versão mais recente (<strong>v${currentAppVersion}</strong>).`, 'success');
+            if (progressWrapper) progressWrapper.classList.add('hidden');
           }
-        } else {
-          setFeedback('ℹ️', `Verificação concluída. Versão atual: <strong>v${currentAppVersion}</strong>.`, 'info');
         }
       } catch (err) {
         console.warn('[VersionTab] Erro ao consultar GitHub API:', err);
-        setFeedback('ℹ️', `Checagem concluída. Versão instalada: <strong>v${currentAppVersion}</strong>.`, 'info');
       } finally {
         setTimeout(() => {
           if (btnCheckText) btnCheckText.textContent = 'procurar update';
@@ -4985,7 +5060,7 @@ function setupVersionSettingsTab(modal) {
   }
 
   // Ouvintes de eventos do Electron AutoUpdater
-  if (window.electronAPI) {
+  if (isElectronApp) {
     if (typeof window.electronAPI.onUpdateChecking === 'function') {
       window.electronAPI.onUpdateChecking(() => {
         setFeedback('🔍', 'Verificando atualizações no GitHub Releases...', 'info');
@@ -5022,16 +5097,37 @@ function setupVersionSettingsTab(modal) {
     }
 
     if (typeof window.electronAPI.onUpdateNotAvailable === 'function') {
-      window.electronAPI.onUpdateNotAvailable((info) => {
+      window.electronAPI.onUpdateNotAvailable(() => {
         setFeedback('✅', `O Sussurro RPG já está atualizado na versão mais recente (<strong>v${currentAppVersion}</strong>).`, 'success');
+        if (progressWrapper) progressWrapper.classList.add('hidden');
       });
     }
 
     if (typeof window.electronAPI.onUpdateError === 'function') {
       window.electronAPI.onUpdateError((err) => {
-        setFeedback('⚠️', `Aviso na checagem: ${err?.message || 'Falha ao buscar no GitHub.'}`, 'warn');
+        console.warn('[AutoUpdater] Evento de erro:', err);
+        if (progressWrapper) progressWrapper.classList.add('hidden');
       });
     }
+  }
+
+  // Ação de forçar atualização / recarregamento Web
+  if (btnForceRefreshWeb) {
+    btnForceRefreshWeb.onclick = async () => {
+      btnForceRefreshWeb.disabled = true;
+      setFeedback('🔄', 'Limpando caches do navegador e recarregando para a versão mais recente...', 'info');
+      if ('caches' in window) {
+        const keys = await caches.keys();
+        await Promise.all(keys.map(k => caches.delete(k)));
+      }
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister()));
+      }
+      setTimeout(() => {
+        window.location.href = window.location.origin + window.location.pathname + '?v=' + Date.now();
+      }, 500);
+    };
   }
 
   // Ação de Reiniciar e Atualizar
