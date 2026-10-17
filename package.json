@@ -74,12 +74,13 @@
     },
     "nsis": {
       "artifactName": "Sussurro-RPG-Setup.exe",
-      "oneClick": false,
+      "oneClick": true,
       "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
+      "allowToChangeInstallationDirectory": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Sussurro RPG"
+      "shortcutName": "Sussurro RPG",
+      "runAfterFinish": true
     }
   },
   "dependencies": {

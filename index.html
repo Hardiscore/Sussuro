@@ -1322,6 +1322,56 @@
     </div>
   </div>
 
+  <!-- Modal Estilizado de Atualização do Sussurro RPG (Substitui a janela quadrada do Windows) -->
+  <div id="app-update-ready-modal" class="modal-backdrop hidden">
+    <div class="update-ready-card">
+      <div class="update-ready-decor-glow"></div>
+      
+      <div class="update-ready-icon-wrap">
+        <div class="update-ready-icon-bg">
+          <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2l8 4.5v9L12 22l-8-6.5v-9L12 2z"/>
+            <path d="M12 22V12"/>
+            <path d="M20 6.5l-8 5.5-8-5.5"/>
+          </svg>
+          <div class="update-ready-sparkle">✨</div>
+        </div>
+      </div>
+
+      <div class="update-ready-content">
+        <div class="update-ready-header">
+          <h2 class="update-ready-title">Atualização Pronta</h2>
+          <span id="update-modal-version-tag" class="update-ready-tag">v1.1.2</span>
+        </div>
+
+        <p class="update-ready-desc">
+          Uma nova versão do <strong>Sussurro RPG</strong> foi baixada com sucesso e está pronta para uso!
+        </p>
+
+        <div class="update-ready-info-box">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2" style="flex-shrink: 0; margin-top: 1px;">
+            <circle cx="12" cy="12" r="10"/>
+            <path d="M12 16v-4"/>
+            <path d="M12 8h.01"/>
+          </svg>
+          <span>O aplicativo só precisa reiniciar rapidinho. Ao confirmar, o app atualiza silenciosamente em segundo plano e reabre sozinho!</span>
+        </div>
+      </div>
+
+      <div class="update-ready-actions">
+        <button id="btn-update-modal-restart" class="btn-update-primary" type="button">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+          </svg>
+          <span id="btn-update-modal-restart-text">Reiniciar e Atualizar</span>
+        </button>
+        <button id="btn-update-modal-dismiss" class="btn-update-secondary" type="button">
+          Depois (ao fechar o app)
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Indicador de Modo Offline (PWA) -->
   <div id="offline-indicator-banner" class="offline-indicator-banner hidden">
     <span class="offline-dot"></span>

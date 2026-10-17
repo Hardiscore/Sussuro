@@ -222,6 +222,8 @@ app.whenReady().then(() => {
     try {
       autoUpdater.autoDownload = true;
       autoUpdater.autoInstallOnAppQuit = true;
+      autoUpdater.disableDifferentialDownload = true; // Força download completo para evitar erro de blockmap/range no GitHub
+      autoUpdater.disableWebInstaller = true;
       autoUpdater.logger = console;
 
       autoUpdater.setFeedURL({
@@ -334,8 +336,10 @@ ipcMain.on('check-for-updates-manual', async () => {
 // Ação para reiniciar e aplicar a nova versão baixada
 ipcMain.on('restart-and-install-update', () => {
   if (autoUpdater) {
-    console.log('[AutoUpdater] Executando quitAndInstall(false, true)...');
-    autoUpdater.quitAndInstall(false, true);
+    console.log('[AutoUpdater] Executando quitAndInstall(true, true) modo silencioso...');
+    // isSilent: true (não exibe janela feia/quadrada do Windows, atualiza silenciosamente)
+    // isForceRunAfter: true (reabre o app automaticamente logo após atualizar)
+    autoUpdater.quitAndInstall(true, true);
   }
 });
 

@@ -5026,8 +5026,12 @@ function setupVersionSettingsTab(modal) {
 
           const isNewer = compareVersions(latestTag, currentAppVersion) > 0;
           if (isNewer) {
+            latestGhReleaseTag = latestTag;
             const exeAsset = Array.isArray(release.assets) && release.assets.find(a => a.name && a.name.toLowerCase().endsWith('.exe'));
             const hasLatestYml = Array.isArray(release.assets) && release.assets.some(a => a.name === 'latest.yml');
+            if (exeAsset) {
+              latestGhExeUrl = exeAsset.browser_download_url;
+            }
 
             if (!exeAsset) {
               setFeedback('⚠️', `Versão <strong>v${latestTag}</strong> encontrada no GitHub, porém o instalador (.exe e latest.yml) ainda não foi anexado à Release pelo GitHub Actions. Tente novamente em alguns instantes.`, 'warn');
@@ -5059,6 +5063,9 @@ function setupVersionSettingsTab(modal) {
     };
   }
 
+  let latestGhReleaseTag = null;
+  let latestGhExeUrl = null;
+
   // Ouvintes de eventos do Electron AutoUpdater
   if (isElectronApp) {
     if (typeof window.electronAPI.onUpdateChecking === 'function') {
@@ -5070,6 +5077,7 @@ function setupVersionSettingsTab(modal) {
     if (typeof window.electronAPI.onUpdateAvailable === 'function') {
       window.electronAPI.onUpdateAvailable((info) => {
         const newVer = info?.version || '';
+        latestGhReleaseTag = newVer;
         setFeedback('📦', `Nova versão <strong>v${newVer}</strong> detectada! Baixando atualização em segundo plano...`, 'success');
         if (progressWrapper) progressWrapper.classList.remove('hidden');
       });
@@ -5093,11 +5101,22 @@ function setupVersionSettingsTab(modal) {
         setFeedback('🎉', `Atualização <strong>v${newVer}</strong> pronta para instalação!`, 'success');
         if (progressWrapper) progressWrapper.classList.add('hidden');
         if (btnInstallNow) btnInstallNow.classList.remove('hidden');
+        showAppUpdateReadyModal(newVer);
       });
     }
 
     if (typeof window.electronAPI.onUpdateNotAvailable === 'function') {
       window.electronAPI.onUpdateNotAvailable(() => {
+        // Se a consulta à API do GitHub já encontrou uma versão mais recente, não sobrescreve com "já atualizado"
+        if (latestGhReleaseTag && compareVersions(latestGhReleaseTag, currentAppVersion) > 0) {
+          setFeedback('📦', `Nova versão <strong>v${latestGhReleaseTag}</strong> disponível no GitHub! Você pode baixar o instalador oficial diretamente pelo botão abaixo:`, 'info');
+          if (progressWrapper) progressWrapper.classList.add('hidden');
+          if (btnDirectDownloadExe && latestGhExeUrl) {
+            btnDirectDownloadExe.href = latestGhExeUrl;
+            btnDirectDownloadExe.classList.remove('hidden');
+          }
+          return;
+        }
         setFeedback('✅', `O Sussurro RPG já está atualizado na versão mais recente (<strong>v${currentAppVersion}</strong>).`, 'success');
         if (progressWrapper) progressWrapper.classList.add('hidden');
       });
@@ -5107,6 +5126,13 @@ function setupVersionSettingsTab(modal) {
       window.electronAPI.onUpdateError((err) => {
         console.warn('[AutoUpdater] Evento de erro:', err);
         if (progressWrapper) progressWrapper.classList.add('hidden');
+        if (latestGhReleaseTag && compareVersions(latestGhReleaseTag, currentAppVersion) > 0) {
+          setFeedback('⚠️', `O instalador automático encontrou uma restrição na rede (${err?.message || 'Falha no download'}). Baixe o instalador oficial diretamente pelo botão abaixo:`, 'warn');
+          if (btnDirectDownloadExe && latestGhExeUrl) {
+            btnDirectDownloadExe.href = latestGhExeUrl;
+            btnDirectDownloadExe.classList.remove('hidden');
+          }
+        }
       });
     }
   }
@@ -5130,14 +5156,45 @@ function setupVersionSettingsTab(modal) {
     };
   }
 
-  // Ação de Reiniciar e Atualizar
+  // Ação de Reiniciar e Atualizar (Abre modal estilizado)
   if (btnInstallNow) {
     btnInstallNow.onclick = () => {
+      showAppUpdateReadyModal(latestGhReleaseTag || currentAppVersion);
+    };
+  }
+}
+
+/**
+ * Exibe a janela modal moderna com as cores do Sussurro (azul e branco) avisando
+ * que a atualização foi baixada e só precisa reiniciar para aplicar tudo sozinho.
+ */
+export function showAppUpdateReadyModal(newVersion = '') {
+  const modal = document.getElementById('app-update-ready-modal');
+  const tag = document.getElementById('update-modal-version-tag');
+  const btnRestart = document.getElementById('btn-update-modal-restart');
+  const btnRestartText = document.getElementById('btn-update-modal-restart-text');
+  const btnDismiss = document.getElementById('btn-update-modal-dismiss');
+
+  if (!modal) return;
+  if (tag && newVersion) {
+    tag.textContent = `v${newVersion.replace(/^v/, '')}`;
+  }
+
+  modal.classList.remove('hidden');
+
+  if (btnRestart) {
+    btnRestart.onclick = () => {
+      btnRestart.disabled = true;
+      if (btnRestartText) btnRestartText.textContent = 'Reiniciando o Sussurro...';
       if (window.electronAPI && typeof window.electronAPI.restartAndInstallUpdate === 'function') {
-        btnInstallNow.disabled = true;
-        btnInstallNow.textContent = 'Reiniciando o Sussurro...';
         window.electronAPI.restartAndInstallUpdate();
       }
+    };
+  }
+
+  if (btnDismiss) {
+    btnDismiss.onclick = () => {
+      modal.classList.add('hidden');
     };
   }
 }
