@@ -62,6 +62,8 @@ select {
 }
 
 /* ==========================================
+   Barra de Título Customizada (Electron)
+   ========================================== */
 #custom-titlebar {
   height: 36px;
   background-color: #111214;

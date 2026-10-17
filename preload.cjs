@@ -98,5 +98,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('app-update-error', handler);
     return () => ipcRenderer.removeListener('app-update-error', handler);
   },
-  restartAndInstallUpdate: () => ipcRenderer.send('restart-and-install-update')
+  restartAndInstallUpdate: () => ipcRenderer.send('restart-and-install-update'),
+
+  // Configurações de Desktop (Bandeja do Sistema e Inicialização com Windows)
+  getDesktopSettings: () => ipcRenderer.invoke('get-desktop-settings'),
+  setMinimizeToTray: (enabled) => ipcRenderer.send('set-minimize-to-tray', enabled),
+  setOpenAtLogin: (enabled) => ipcRenderer.send('set-open-at-login', enabled),
+  getCustomAssets: () => ipcRenderer.invoke('get-custom-assets')
 });
+

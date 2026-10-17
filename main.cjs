@@ -6,9 +6,15 @@
  * comunicação IPC e Atalhos Globais de Sistema (Push to Talk e Mudo em segundo plano).
  */
 
-const { app, BrowserWindow, ipcMain, shell, session, desktopCapturer, globalShortcut } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, session, desktopCapturer, globalShortcut, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
+
+// Estado de ciclo de vida e bandeja do sistema
+let isQuitting = false;
+let minimizeToTray = true; // Ativado por padrão (pode ser alternado na aba Geral das Configurações)
+let tray = null;
+
 
 // Suporte a Atualização Automática via GitHub Releases (electron-updater)
 let autoUpdater = null;
@@ -181,14 +187,91 @@ function createWindow() {
     }
   });
 
+  mainWindow.on('close', (event) => {
+    if (!isQuitting && minimizeToTray) {
+      event.preventDefault();
+      mainWindow.hide();
+      return false;
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
+function createTray(iconPath) {
+  if (tray) return;
+  try {
+    let trayIcon = null;
+    if (iconPath && fs.existsSync(iconPath)) {
+      trayIcon = nativeImage.createFromPath(iconPath);
+    } else {
+      trayIcon = nativeImage.createEmpty();
+    }
+    tray = new Tray(trayIcon);
+    tray.setToolTip('Sussurro RPG');
+
+    const contextMenu = Menu.buildFromTemplate([
+      {
+        label: 'Abrir Sussurro RPG',
+        click: () => {
+          if (mainWindow) {
+            mainWindow.show();
+            mainWindow.focus();
+          }
+        }
+      },
+      {
+        label: 'Silenciar Microfone',
+        click: () => {
+          if (mainWindow) {
+            mainWindow.webContents.send('global-hotkey-action', 'toggle-mute');
+          }
+        }
+      },
+      { type: 'separator' },
+      {
+        label: 'Sair do Sussurro RPG',
+        click: () => {
+          isQuitting = true;
+          app.quit();
+        }
+      }
+    ]);
+
+    tray.setContextMenu(contextMenu);
+
+    tray.on('click', () => {
+      if (mainWindow) {
+        if (mainWindow.isVisible()) {
+          mainWindow.focus();
+        } else {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    });
+
+    tray.on('double-click', () => {
+      if (mainWindow) {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    });
+  } catch (err) {
+    console.warn('[Tray] Erro ao criar ícone na bandeja:', err);
+  }
+}
+
 // Inicialização da aplicação
 app.whenReady().then(() => {
+  const iconPath = fs.existsSync(path.join(__dirname, 'icon.ico'))
+    ? path.join(__dirname, 'icon.ico')
+    : undefined;
+
   createWindow();
+  createTray(iconPath);
 
   if (uIOhook) {
     try {
@@ -284,11 +367,18 @@ app.whenReady().then(() => {
   });
 });
 
+app.on('before-quit', () => {
+  isQuitting = true;
+});
+
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
+  if (!minimizeToTray || isQuitting) {
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
   }
 });
+
 
 // Ação para obter versão atual e status do app
 ipcMain.handle('get-app-version', () => {
@@ -393,6 +483,82 @@ ipcMain.handle('get-desktop-sources', async () => {
   } catch (err) {
     console.error('Erro ao obter fontes de captura:', err);
     return [];
+  }
+});
+
+// ============================================================================
+// CONFIGURAÇÕES GERAIS DE DESKTOP (Bandeja do Sistema e Inicialização com Windows)
+// ============================================================================
+ipcMain.handle('get-desktop-settings', () => {
+  let openAtLogin = false;
+  try {
+    const loginItem = app.getLoginItemSettings();
+    openAtLogin = !!loginItem.openAtLogin;
+  } catch (e) {}
+  return {
+    minimizeToTray,
+    openAtLogin
+  };
+});
+
+ipcMain.on('set-minimize-to-tray', (_event, enabled) => {
+  minimizeToTray = !!enabled;
+  console.log('[Desktop] Minimizar para a bandeja configurado como:', minimizeToTray);
+});
+
+ipcMain.on('set-open-at-login', (_event, enabled) => {
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: !!enabled,
+      path: process.execPath
+    });
+    console.log('[Desktop] Iniciar com o Windows configurado como:', enabled);
+  } catch (e) {
+    console.warn('[LoginSettings] Erro ao configurar login item:', e);
+  }
+});
+
+// Escaneamento de imagens em pastas locais no Electron (file:// protocol)
+ipcMain.handle('get-custom-assets', () => {
+  try {
+    const validImgRegex = /\.(png|jpe?g|webp|svg)$/i;
+    const bgDir = path.join(__dirname, 'public', 'backgrounds');
+    const accDir = path.join(__dirname, 'public', 'accessories');
+
+    let backgrounds = [];
+    let accessories = [];
+
+    if (fs.existsSync(bgDir)) {
+      backgrounds = fs.readdirSync(bgDir).filter(f => validImgRegex.test(f)).map(file => ({
+        id: file.replace(/\.[^/.]+$/, "").toLowerCase().replace(/[^a-z0-9_-]/g, "_"),
+        name: file.replace(/\.[^/.]+$/, "").replace(/[_-]+/g, " ").replace(/\b\w/g, l => l.toUpperCase()),
+        fileName: file,
+        url: 'public/backgrounds/' + file
+      }));
+    }
+
+    if (fs.existsSync(accDir)) {
+      accessories = fs.readdirSync(accDir).filter(f => validImgRegex.test(f)).map(file => {
+        const lower = file.toLowerCase();
+        let anchor = "head";
+        if (/oculos|tapa_olho|olho|eye|glasses/i.test(lower)) anchor = "eyes";
+        else if (/mascara|barba|bigode|boca|queixo|mouth|beard|mask/i.test(lower)) anchor = "mouth";
+        else if (/peito|colar|armadura|ombro|chest/i.test(lower)) anchor = "chest";
+        else if (/dragao|mascote|asa|lateral|side|pet|wing/i.test(lower)) anchor = "side";
+        return {
+          id: file.replace(/\.[^/.]+$/, "").toLowerCase().replace(/[^a-z0-9_-]/g, "_"),
+          name: file.replace(/\.[^/.]+$/, "").replace(/[_-]+/g, " ").replace(/\b\w/g, l => l.toUpperCase()),
+          fileName: file,
+          defaultAnchor: anchor,
+          url: 'public/accessories/' + file
+        };
+      });
+    }
+
+    return { success: true, backgrounds, accessories };
+  } catch (err) {
+    console.warn('[Assets] Erro ao escanear pastas locais no Electron:', err);
+    return { success: false, backgrounds: [], accessories: [] };
   }
 });
 

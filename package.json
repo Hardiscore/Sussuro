@@ -1,7 +1,7 @@
 {
   "name": "sussurro-rpg",
   "private": true,
-  "version": "1.1.3",
+  "version": "1.1.5",
   "description": "Sussurro - Aplicativo de chamadas de voz e vídeo em grupo",
   "author": "Hardiscore",
   "repository": {
@@ -39,7 +39,8 @@
     "asarUnpack": [
       "**/node_modules/uiohook-napi/**/*",
       "**/node_modules/node-global-key-listener/**/*",
-      "noise-suppressor.js"
+      "noise-suppressor.js",
+      "video-effects.js"
     ],
     "directories": {
       "output": "release"
@@ -54,6 +55,7 @@
       "app.js",
       "webrtc.js",
       "noise-suppressor.js",
+      "video-effects.js",
       "firebase-config.js",
       "icon.ico",
       "package.json",

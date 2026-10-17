@@ -7,7 +7,23 @@
 
 import { TavernWebRTC, getSavedIceServers, saveIceServers, DEFAULT_ICE_SERVERS } from './webrtc.js';
 import { getStoredFirebaseConfig, saveFirebaseConfig, resetFirebaseConfig, BUILTIN_FIREBASE_CONFIG } from './firebase-config.js';
-import { videoEffects } from './video-effects.js';
+// Importação resiliente de efeitos de vídeo (se o módulo falhar ou faltar, não derruba o app)
+let videoEffects;
+try {
+  const mod = await import('./video-effects.js');
+  videoEffects = mod.videoEffects;
+} catch (err) {
+  console.warn('[VideoEffects] Falha ao carregar video-effects.js, usando fallback seguro:', err);
+  videoEffects = {
+    startPipeline: () => {},
+    stopPipeline: () => {},
+    updateConfig: () => {},
+    getProcessedTrack: () => null,
+    registerBackground: () => {},
+    registerAccessory: () => {},
+    config: { bgPreset: 'none', colorFilter: 'none', selectedAccessory: 'none' }
+  };
+}
 
 const STORAGE_KEYS = {
   USERNAME: 'tavern_username',
@@ -332,7 +348,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.1.3';
+export const APP_VERSION = '1.1.5';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -677,6 +693,10 @@ async function initApp() {
       await enumerateDevices().catch(() => {});
     });
   }
+
+  window.__APP_INITIALIZED__ = true;
+  const btnJoin = document.getElementById('btn-join-room');
+  if (btnJoin) btnJoin.dataset.ready = 'true';
 }
 
 // ============================================================================
@@ -4485,26 +4505,38 @@ function setupFilterAndAvatarSettings(modal) {
         videoEffects.registerAccessory(a.id, a.url || a.dataUrl);
       });
 
-      // 2. Consulta a API do servidor que escaneia as pastas public/backgrounds e public/accessories
-      try {
-        const res = await fetch('/api/custom-assets/list');
-        if (res.ok) {
-          const data = await res.json();
-          if (data && data.success) {
-            (data.backgrounds || []).forEach(b => {
-              customBackgroundsMap.set(b.id, b);
-              videoEffects.registerBackground(b.id, b.url);
-              RPGAssetVault.save('backgrounds', b);
-            });
-            (data.accessories || []).forEach(a => {
-              customAccessoriesMap.set(a.id, a);
-              videoEffects.registerAccessory(a.id, a.url);
-              RPGAssetVault.save('accessories', a);
-            });
-          }
+      // 2. Consulta mídias padrão locais via Electron IPC ou API do servidor
+      let customData = null;
+      if (window.electronAPI && typeof window.electronAPI.getCustomAssets === 'function') {
+        try {
+          customData = await window.electronAPI.getCustomAssets();
+        } catch (ipcErr) {
+          console.warn('[Assets] Erro ao obter assets via Electron IPC:', ipcErr);
         }
-      } catch (e) {
-        console.warn('[Assets] Modo offline ou servidor estático:', e);
+      }
+
+      if (!customData || !customData.success) {
+        try {
+          const res = await fetch('/api/custom-assets/list');
+          if (res.ok) {
+            customData = await res.json();
+          }
+        } catch (e) {
+          console.warn('[Assets] Modo offline ou servidor estático:', e);
+        }
+      }
+
+      if (customData && customData.success) {
+        (customData.backgrounds || []).forEach(b => {
+          customBackgroundsMap.set(b.id, b);
+          videoEffects.registerBackground(b.id, b.url);
+          RPGAssetVault.save('backgrounds', b);
+        });
+        (customData.accessories || []).forEach(a => {
+          customAccessoriesMap.set(a.id, a);
+          videoEffects.registerAccessory(a.id, a.url);
+          RPGAssetVault.save('accessories', a);
+        });
       }
 
       // 3. Renderiza o Grid de Cenários
