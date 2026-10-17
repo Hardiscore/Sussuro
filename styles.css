@@ -62,12 +62,10 @@ select {
 }
 
 /* ==========================================
-   Custom Titlebar (Electron Window Drag Region)
-   ========================================== */
 #custom-titlebar {
   height: 36px;
   background-color: #111214;
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: space-between;
   padding: 0 12px;
@@ -75,7 +73,16 @@ select {
   color: var(--text-muted);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   -webkit-app-region: drag;
-  z-index: 999;
+  user-select: none;
+  z-index: 99999;
+}
+
+html.is-electron #custom-titlebar {
+  display: flex !important;
+}
+
+html:not(.is-electron) #custom-titlebar {
+  display: none !important;
 }
 
 .titlebar-brand {
@@ -3613,5 +3620,71 @@ video.filter-arcane-night {
   border-color: rgba(255, 255, 255, 0.16);
 }
 
+/* ==========================================
+   Tela Global de Tratamento de Erro (Fail-Safe)
+   ========================================== */
+.global-error-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 100001;
+}
 
+.global-error-card {
+  background: #18191c;
+  border: 1px solid rgba(240, 71, 71, 0.35);
+  border-radius: 16px;
+  max-width: 480px;
+  width: 100%;
+  padding: 24px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  text-align: center;
+  animation: modalPopIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
 
+.global-error-icon {
+  font-size: 38px;
+  margin-bottom: 12px;
+}
+
+.global-error-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0 0 8px 0;
+}
+
+.global-error-msg {
+  font-size: 13.5px;
+  color: var(--text-muted, #949ba4);
+  line-height: 1.5;
+  margin: 0 0 16px 0;
+}
+
+.global-error-detail-box {
+  background: #111214;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-family: monospace;
+  font-size: 11px;
+  color: #f87171;
+  text-align: left;
+  max-height: 140px;
+  overflow-y: auto;
+  margin-bottom: 16px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.global-error-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}

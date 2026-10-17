@@ -59,11 +59,13 @@ export const BUILTIN_FIREBASE_CONFIG = {
  */
 export function getStoredFirebaseConfig() {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY_FIREBASE);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (parsed && typeof parsed === 'object' && !parsed.databaseURL?.includes('seu-projeto-rpg')) {
-        return { ...BUILTIN_FIREBASE_CONFIG, ...parsed };
+    if (typeof window !== 'undefined' && 'localStorage' in window && window.localStorage) {
+      const saved = window.localStorage.getItem(STORAGE_KEY_FIREBASE);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object' && !parsed.databaseURL?.includes('seu-projeto-rpg')) {
+          return { ...BUILTIN_FIREBASE_CONFIG, ...parsed };
+        }
       }
     }
   } catch (err) {
@@ -77,12 +79,14 @@ export function getStoredFirebaseConfig() {
  */
 export function saveFirebaseConfig(newConfig) {
   try {
-    localStorage.setItem(STORAGE_KEY_FIREBASE, JSON.stringify(newConfig));
-    return true;
+    if (typeof window !== 'undefined' && 'localStorage' in window && window.localStorage) {
+      window.localStorage.setItem(STORAGE_KEY_FIREBASE, JSON.stringify(newConfig));
+      return true;
+    }
   } catch (err) {
     console.error('[FirebaseConfig] Erro ao salvar configuração:', err);
-    return false;
   }
+  return false;
 }
 
 /**
@@ -90,11 +94,12 @@ export function saveFirebaseConfig(newConfig) {
  */
 export function resetFirebaseConfig() {
   try {
-    localStorage.removeItem(STORAGE_KEY_FIREBASE);
-    return true;
-  } catch (err) {
-    return false;
-  }
+    if (typeof window !== 'undefined' && 'localStorage' in window && window.localStorage) {
+      window.localStorage.removeItem(STORAGE_KEY_FIREBASE);
+      return true;
+    }
+  } catch (err) {}
+  return false;
 }
 
 /**

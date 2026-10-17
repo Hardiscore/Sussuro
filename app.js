@@ -127,10 +127,60 @@ export const customAccessoriesMap = new Map();
 export const ROOMS_PER_PAGE = 2; // Exatamente no máximo 2 salas visíveis por vez no lobby
 let currentRoomPage = 0;
 
+// ============================================================================
+// STORAGE SEGURO COM FALLBACK EM MEMÓRIA (Proteção contra SecurityError e Opaque Origins)
+// ============================================================================
+const memoryStorage = new Map();
+export const safeStorage = {
+  getItem(key) {
+    try {
+      if (typeof window !== 'undefined' && 'localStorage' in window && window.localStorage) {
+        return window.localStorage.getItem(key);
+      }
+    } catch (e) {}
+    return memoryStorage.has(key) ? memoryStorage.get(key) : null;
+  },
+  setItem(key, value) {
+    try {
+      if (typeof window !== 'undefined' && 'localStorage' in window && window.localStorage) {
+        window.localStorage.setItem(key, String(value));
+        return true;
+      }
+    } catch (e) {}
+    memoryStorage.set(key, String(value));
+    return true;
+  },
+  removeItem(key) {
+    try {
+      if (typeof window !== 'undefined' && 'localStorage' in window && window.localStorage) {
+        window.localStorage.removeItem(key);
+      }
+    } catch (e) {}
+    memoryStorage.delete(key);
+    return true;
+  }
+};
+
+/**
+ * Reproduz vídeo ou áudio de forma 100% segura sem lançar exceções se play() for undefined ou rejeitado
+ */
+export function safePlay(mediaEl) {
+  if (!mediaEl) return Promise.resolve();
+  try {
+    const res = mediaEl.play();
+    if (res && typeof res.catch === 'function') {
+      return res.catch(() => {});
+    }
+    return Promise.resolve(res);
+  } catch (err) {
+    return Promise.resolve();
+  }
+}
+
 const StorageService = {
   get(key, defaultValue = null) {
     try {
-      const val = localStorage.getItem(key);
+      const val = safeStorage.getItem(key);
       if (val === null) return defaultValue;
       return val;
     } catch (e) {
@@ -141,7 +191,7 @@ const StorageService = {
 
   set(key, value) {
     try {
-      localStorage.setItem(key, String(value));
+      safeStorage.setItem(key, String(value));
       return true;
     } catch (e) {
       console.warn(`[StorageService] Failed to save key '${key}':`, e);
@@ -238,7 +288,7 @@ const StorageService = {
 
   getSavedRooms() {
     try {
-      const data = localStorage.getItem(STORAGE_KEYS.SAVED_ROOMS);
+      const data = safeStorage.getItem(STORAGE_KEYS.SAVED_ROOMS);
       if (data) {
         const parsed = JSON.parse(data);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -262,7 +312,7 @@ const StorageService = {
         createdAt: Date.now()
       });
       if (rooms.length > 20) rooms = rooms.slice(0, 20);
-      localStorage.setItem(STORAGE_KEYS.SAVED_ROOMS, JSON.stringify(rooms));
+      safeStorage.setItem(STORAGE_KEYS.SAVED_ROOMS, JSON.stringify(rooms));
     } catch (e) {}
   },
 
@@ -270,7 +320,7 @@ const StorageService = {
     try {
       let rooms = this.getSavedRooms();
       rooms = rooms.filter(r => (typeof r === 'string' ? r !== roomId : r.id !== roomId));
-      localStorage.setItem(STORAGE_KEYS.SAVED_ROOMS, JSON.stringify(rooms));
+      safeStorage.setItem(STORAGE_KEYS.SAVED_ROOMS, JSON.stringify(rooms));
       return rooms;
     } catch (e) {
       return [];
@@ -282,7 +332,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.1.2';
+export const APP_VERSION = '1.1.3';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -579,39 +629,46 @@ function generateRpgRoomName() {
 }
 
 // ============================================================================
-// INICIALIZAÇÃO DA INTERFACE
+// INICIALIZAÇÃO DA INTERFACE (Isolamento de Falhas e Resiliência Total)
 // ============================================================================
 async function initApp() {
-  try {
-    setupElectronTitlebar();
-  } catch (e) {
-    console.error('[Init] Erro em setupElectronTitlebar:', e);
+  const initModules = [
+    { name: 'setupElectronTitlebar', fn: setupElectronTitlebar },
+    { name: 'setupPwaAndOfflineSupport', fn: setupPwaAndOfflineSupport },
+    { name: 'setupLobbyInputs', fn: setupLobbyInputs },
+    { name: 'setupSettingsModal', fn: setupSettingsModal },
+    { name: 'setupScreenShareModal', fn: setupScreenShareModal },
+    { name: 'setupDiceRoller', fn: setupDiceRoller },
+    { name: 'setupCallControls', fn: setupCallControls },
+    { name: 'setupMobilePushToTalk', fn: setupMobilePushToTalk },
+    { name: 'setupLayoutSelector', fn: setupLayoutSelector },
+    { name: 'setupKeyboardShortcuts', fn: setupKeyboardShortcuts },
+    { name: 'applyGridLayout', fn: () => applyGridLayout(state.currentLayout) },
+    { name: 'applyFiltersAndAvatarVisuals', fn: applyFiltersAndAvatarVisuals }
+  ];
+
+  for (const mod of initModules) {
+    try {
+      mod.fn();
+    } catch (err) {
+      console.error(`[Init] Falha tratada no módulo ${mod.name}:`, err);
+    }
   }
 
-  try {
-    setupPwaAndOfflineSupport();
-    setupLobbyInputs();
-    setupSettingsModal();
-    setupScreenShareModal();
-    setupDiceRoller();
-    setupCallControls();
-    setupMobilePushToTalk();
-    setupLayoutSelector();
-    setupKeyboardShortcuts();
-    applyGridLayout(state.currentLayout);
-    applyFiltersAndAvatarVisuals();
-    const lobbyEl = document.getElementById('lobby-screen');
-    if (lobbyEl) lobbyEl.scrollTop = 0;
-  } catch (e) {
-    console.error('[Init] Erro na configuração dos controles da UI:', e);
-  }
+  const lobbyEl = document.getElementById('lobby-screen');
+  if (lobbyEl) lobbyEl.scrollTop = 0;
 
   // Inicializa prévia local no Lobby (solicita permissão de Mic/Câmera) e depois enumera os dispositivos com nomes reais
   try {
     await initLobbyPreview(false);
+  } catch (e) {
+    console.warn('[Init] Erro ao inicializar prévia local:', e);
+  }
+
+  try {
     await enumerateDevices();
   } catch (e) {
-    console.warn('[Init] Erro ao inicializar mídia local:', e);
+    console.warn('[Init] Erro ao enumerar dispositivos:', e);
   }
 
   if (navigator.mediaDevices && typeof navigator.mediaDevices.addEventListener === 'function') {
@@ -632,14 +689,15 @@ function setupElectronTitlebar() {
   const windowControls = document.getElementById('window-controls');
 
   if (isElectron) {
+    document.documentElement.classList.add('is-electron');
     if (titlebar) titlebar.classList.remove('hidden');
     if (statusBadge) statusBadge.textContent = 'Electron Desktop';
     const btnMin = document.getElementById('btn-window-minimize');
     const btnMax = document.getElementById('btn-window-maximize');
     const btnClose = document.getElementById('btn-window-close');
-    if (btnMin) btnMin.onclick = () => window.electronAPI.minimize();
-    if (btnMax) btnMax.onclick = () => window.electronAPI.maximize();
-    if (btnClose) btnClose.onclick = () => window.electronAPI.close();
+    if (btnMin) btnMin.onclick = () => window.electronAPI && window.electronAPI.minimize && window.electronAPI.minimize();
+    if (btnMax) btnMax.onclick = () => window.electronAPI && window.electronAPI.maximize && window.electronAPI.maximize();
+    if (btnClose) btnClose.onclick = () => window.electronAPI && window.electronAPI.close && window.electronAPI.close();
 
     // Notificações de Atualização Automática via GitHub Releases
     if (typeof window.electronAPI.onUpdateAvailable === 'function') {
@@ -664,7 +722,8 @@ function setupElectronTitlebar() {
 
     if (typeof window.electronAPI.onUpdateDownloaded === 'function') {
       window.electronAPI.onUpdateDownloaded((info) => {
-        showUpdateBanner(info);
+        // Exibe a janela modal bonita com cantos redondos no estilo do app
+        showAppUpdateReadyModal(info?.version);
       });
     }
 
@@ -675,6 +734,7 @@ function setupElectronTitlebar() {
     }
   } else {
     // No Navegador Web, Android ou PWA instalado, oculta completamente a barra de janela do topo
+    document.documentElement.classList.remove('is-electron');
     if (titlebar) titlebar.classList.add('hidden');
     if (windowControls) windowControls.style.display = 'none';
   }
@@ -3020,8 +3080,10 @@ function updateAvatarVisuals() {
           localVideo.srcObject = rawStream;
         }
       }
-      localVideo.play().catch(() => {});
-      videoEffects.startPipeline('local', localVideo, localCanvas, localAcc, localAtmo);
+      safePlay(localVideo);
+      if (state.isInCall && state.webrtc && localVideo.srcObject) {
+        videoEffects.startPipeline('local', localVideo, localCanvas, localAcc, localAtmo);
+      }
     }
     document.getElementById('local-icon-video')?.classList.remove('muted');
   }
@@ -3832,7 +3894,7 @@ function setupSettingsModal() {
     updateFullscreenIcon(isFs);
 
     try {
-      localStorage.setItem('sussurro_settings_fullscreen', isFs ? 'true' : 'false');
+      safeStorage.setItem('sussurro_settings_fullscreen', isFs ? 'true' : 'false');
     } catch (e) {}
   }
 
@@ -3853,7 +3915,7 @@ function setupSettingsModal() {
 
   // Restaura preferência salva de tela cheia
   try {
-    const savedFs = localStorage.getItem('sussurro_settings_fullscreen');
+    const savedFs = safeStorage.getItem('sussurro_settings_fullscreen');
     if (savedFs === 'true' && settingsWindow) {
       settingsWindow.classList.add('is-fullscreen');
       btnToggleFullscreen?.classList.add('is-active');
@@ -4274,7 +4336,7 @@ function setupFilterAndAvatarSettings(modal) {
     btnRemoveAvatar.onclick = (e) => {
       e.stopPropagation();
       state.customAvatar = null;
-      try { localStorage.removeItem(STORAGE_KEYS.CUSTOM_AVATAR); } catch (err) {}
+      try { safeStorage.removeItem(STORAGE_KEYS.CUSTOM_AVATAR); } catch (err) {}
       if (state.webrtc) {
         state.webrtc.userInfo.customAvatar = null;
         state.webrtc.broadcastMetadata();
@@ -4795,7 +4857,7 @@ function setupFilterAndAvatarSettings(modal) {
       e.stopPropagation();
       state.customBg = null;
       state.bgPreset = 'none';
-      try { localStorage.removeItem(STORAGE_KEYS.CUSTOM_BG); } catch (err) {}
+      try { safeStorage.removeItem(STORAGE_KEYS.CUSTOM_BG); } catch (err) {}
       StorageService.set(STORAGE_KEYS.BG_PRESET, 'none');
       updateBgCardSelection();
       applyFiltersAndAvatarVisuals();
@@ -4808,7 +4870,7 @@ function setupFilterAndAvatarSettings(modal) {
       e.stopPropagation();
       state.customAccessory = null;
       state.selectedAccessory = 'none';
-      try { localStorage.removeItem(STORAGE_KEYS.CUSTOM_ACCESSORY); } catch (err) {}
+      try { safeStorage.removeItem(STORAGE_KEYS.CUSTOM_ACCESSORY); } catch (err) {}
       StorageService.set(STORAGE_KEYS.ACCESSORY, 'none');
       updateAccCardSelection();
       applyFiltersAndAvatarVisuals();

@@ -267,12 +267,12 @@ async function startServer() {
   // API de Saúde e Versão (Usada pelo Auto-Updater do PWA)
   app.get("/api/health", (_req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.json({ status: "ok", version: "1.1.2", activeRooms: rooms.size });
+    res.json({ status: "ok", version: "1.1.3", activeRooms: rooms.size });
   });
 
   app.get("/api/version", (_req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.json({ version: "1.1.2", updatedAt: "16/10/2026" });
+    res.json({ version: "1.1.3", updatedAt: "17/10/2026" });
   });
 
   // Rota Permanente para Download do Instalador Windows (.exe) da Release marcada como Latest no GitHub

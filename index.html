@@ -30,11 +30,57 @@
     }
   }
   </script>
+  <script>
+    // Detecção imediata do ambiente Electron no documento para evitar travamentos visuais
+    (function() {
+      try {
+        if (window.electronAPI && window.electronAPI.isElectron) {
+          document.documentElement.classList.add('is-electron');
+        }
+      } catch (e) {}
+
+      // Tratamento Global de Erros para nunca deixar o app travado em tela preta
+      window.showGlobalErrorScreen = function(message, error) {
+        try {
+          var screen = document.getElementById('app-global-error-screen');
+          var msgEl = document.getElementById('global-error-msg-text');
+          var detailEl = document.getElementById('global-error-detail-box');
+          if (screen) {
+            if (msgEl && message) msgEl.textContent = String(message);
+            if (detailEl && error) {
+              detailEl.textContent = (error && (error.stack || error.message)) ? (error.stack || error.message) : String(error);
+            }
+            screen.classList.remove('hidden');
+          }
+        } catch (err) {
+          console.error('[FailSafe UI]', err);
+        }
+      };
+
+      window.addEventListener('error', function(event) {
+        var msg = event.message || '';
+        if (msg.indexOf('ResizeObserver') !== -1 || msg.indexOf('Script error') !== -1) return;
+        console.error('[Global Error]', msg, event.error);
+        // Só exibe modal se os botões essenciais da tela ainda não estiverem disponíveis
+        var btnJoin = document.getElementById('btn-join-room');
+        if (!btnJoin || !btnJoin.onclick) {
+          window.showGlobalErrorScreen(msg, event.error);
+        }
+      });
+
+      window.addEventListener('unhandledrejection', function(event) {
+        var reason = event.reason;
+        var msg = reason && reason.message ? reason.message : String(reason || '');
+        if (msg.indexOf('ResizeObserver') !== -1) return;
+        console.warn('[Global Unhandled Rejection]', reason);
+      });
+    })();
+  </script>
 </head>
 <body>
 
   <!-- Custom Titlebar exclusiva para Electron Desktop (oculta no Web/PWA/Celular) -->
-  <header id="custom-titlebar" class="hidden">
+  <header id="custom-titlebar">
     <div class="titlebar-brand">
       <!-- Ícone D20 / Headset -->
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -48,13 +94,13 @@
 
     <div class="titlebar-right-actions" style="display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag;">
       <div class="titlebar-controls" id="window-controls">
-        <button class="window-btn" id="btn-window-minimize" title="Minimizar">
+        <button class="window-btn" id="btn-window-minimize" title="Minimizar" type="button" onclick="window.electronAPI && window.electronAPI.minimize && window.electronAPI.minimize()">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg>
         </button>
-        <button class="window-btn" id="btn-window-maximize" title="Maximizar / Restaurar">
+        <button class="window-btn" id="btn-window-maximize" title="Maximizar / Restaurar" type="button" onclick="window.electronAPI && window.electronAPI.maximize && window.electronAPI.maximize()">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
         </button>
-        <button class="window-btn close-btn" id="btn-window-close" title="Fechar">
+        <button class="window-btn close-btn" id="btn-window-close" title="Fechar" type="button" onclick="window.electronAPI && window.electronAPI.close && window.electronAPI.close()">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
       </div>
@@ -1380,6 +1426,21 @@
 
   <!-- Elemento de áudio silencioso para Media Session / Keep-Alive em segundo plano no Android -->
   <audio id="bg-keepalive-audio" loop playsinline muted style="display: none;"></audio>
+
+  <!-- Tela Global de Tratamento de Erro (Fail-Safe Anti-Travamento) -->
+  <div id="app-global-error-screen" class="global-error-backdrop hidden" style="z-index: 100001;">
+    <div class="global-error-card">
+      <div class="global-error-icon">⚠️</div>
+      <h3 class="global-error-title">Aviso de Estabilidade da Interface</h3>
+      <p class="global-error-msg" id="global-error-msg-text">Ocorreu um imprevisto na renderização. Seus botões e controles continuam ativos.</p>
+      <div class="global-error-detail-box hidden" id="global-error-detail-box"></div>
+      <div class="global-error-actions">
+        <button type="button" class="btn btn-primary" id="btn-global-error-reload" onclick="window.location.reload()">Recarregar Janela</button>
+        <button type="button" class="btn btn-secondary" id="btn-global-error-toggle-details" onclick="(function(){ var d = document.getElementById('global-error-detail-box'); if (d) d.classList.toggle('hidden'); })()">Ver Detalhes</button>
+        <button type="button" class="btn btn-secondary" id="btn-global-error-dismiss" onclick="(function(){ var s = document.getElementById('app-global-error-screen'); if (s) s.classList.add('hidden'); })()">Continuar</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="./app.js"></script>
 </body>

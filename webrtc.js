@@ -32,11 +32,13 @@ export const DEFAULT_ICE_SERVERS = [
  */
 export function getSavedIceServers() {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY_ICE);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+    if (typeof window !== 'undefined' && 'localStorage' in window && window.localStorage) {
+      const saved = window.localStorage.getItem(STORAGE_KEY_ICE);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed;
+        }
       }
     }
   } catch (err) {
@@ -50,12 +52,14 @@ export function getSavedIceServers() {
  */
 export function saveIceServers(servers) {
   try {
-    localStorage.setItem(STORAGE_KEY_ICE, JSON.stringify(servers));
-    return true;
+    if (typeof window !== 'undefined' && 'localStorage' in window && window.localStorage) {
+      window.localStorage.setItem(STORAGE_KEY_ICE, JSON.stringify(servers));
+      return true;
+    }
   } catch (err) {
     console.error('[WebRTC] Erro ao salvar ICE servers:', err);
-    return false;
   }
+  return false;
 }
 
 /**
