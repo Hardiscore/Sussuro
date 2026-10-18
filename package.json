@@ -1,7 +1,7 @@
 {
   "name": "sussurro-rpg",
   "private": true,
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "Sussurro - Aplicativo de chamadas de voz e vídeo em grupo",
   "author": "Hardiscore",
   "repository": {
@@ -54,6 +54,7 @@
       "styles.css",
       "app.js",
       "webrtc.js",
+      "chat.js",
       "noise-suppressor.js",
       "video-effects.js",
       "firebase-config.js",

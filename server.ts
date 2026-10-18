@@ -264,15 +264,26 @@ async function startServer() {
     }
   });
 
+  function getAppVersion(): string {
+    try {
+      const pkgPath = path.join(process.cwd(), "package.json");
+      if (fs.existsSync(pkgPath)) {
+        const data = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
+        if (data && data.version) return String(data.version).trim();
+      }
+    } catch (e) {}
+    return "1.1.6";
+  }
+
   // API de Saúde e Versão (Usada pelo Auto-Updater do PWA)
   app.get("/api/health", (_req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.json({ status: "ok", version: "1.1.3", activeRooms: rooms.size });
+    res.json({ status: "ok", version: getAppVersion(), activeRooms: rooms.size });
   });
 
   app.get("/api/version", (_req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
-    res.json({ version: "1.1.3", updatedAt: "17/10/2026" });
+    res.json({ version: getAppVersion(), updatedAt: new Date().toLocaleDateString('pt-BR') });
   });
 
   // Rota Permanente para Download do Instalador Windows (.exe) da Release marcada como Latest no GitHub

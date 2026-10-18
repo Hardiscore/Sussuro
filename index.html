@@ -44,87 +44,10 @@
         }
       } catch (e) {}
 
-      // Tratamento Global de Erros para nunca deixar o app travado em tela preta
+      // Logger seguro para depuração silenciosa (sem popups bloqueantes)
       window.showGlobalErrorScreen = function(message, error) {
-        try {
-          var screen = document.getElementById('app-global-error-screen');
-          var msgEl = document.getElementById('global-error-msg-text');
-          var detailEl = document.getElementById('global-error-detail-box');
-          if (screen) {
-            if (msgEl && message) msgEl.textContent = String(message);
-            if (detailEl && error) {
-              detailEl.textContent = (error && (error.stack || error.message)) ? (error.stack || error.message) : String(error);
-            }
-            screen.classList.remove('hidden');
-          }
-        } catch (err) {
-          console.error('[FailSafe UI]', err);
-        }
+        console.warn('[App Log]', message, error);
       };
-
-      // Captura erros globais e erros de carregamento de recursos essenciais (como scripts que faltem)
-      window.addEventListener('error', function(event) {
-        // Ignora erros de WebSocket (HMR desabilitado em preview / iframe)
-        var target = event.target || event.srcElement;
-        if (target && (
-          (typeof WebSocket !== 'undefined' && target instanceof WebSocket) ||
-          target.constructor?.name === 'WebSocket' ||
-          (target.url && (String(target.url).indexOf('ws:') === 0 || String(target.url).indexOf('wss:') === 0))
-        )) {
-          return;
-        }
-
-        var msg = event.message || '';
-        if (msg.indexOf('ResizeObserver') !== -1 || msg.indexOf('Script error') !== -1 || msg.indexOf('WebSocket') !== -1) {
-          return;
-        }
-
-        var errorDesc = '';
-
-        if (target && (target.tagName === 'SCRIPT' || target.tagName === 'LINK')) {
-          var file = target.src || target.href || target.getAttribute('src') || '';
-          var shortName = file.split('/').pop().split('?')[0] || file;
-          errorDesc = 'Falha ao carregar arquivo essencial: ' + shortName + ' (net::ERR_FILE_NOT_FOUND).';
-          console.error('[Resource Load Error]', file, event);
-        } else if (event.error || (event.message && String(event.message).trim().length > 0)) {
-          errorDesc = event.message || (event.error && (event.error.message || event.error.stack)) || '';
-          console.error('[Global Error]', errorDesc, event.error);
-        } else {
-          // Evento genérico sem mensagem nem erro nem tag de script: ignora
-          return;
-        }
-
-        window.__LAST_ERROR__ = errorDesc;
-
-        // Se os botões principais ainda não estão ativos, exibe tela de segurança
-        if (!window.__APP_INITIALIZED__) {
-          window.showGlobalErrorScreen(errorDesc, event.error || errorDesc);
-        }
-      }, true); // useCapture = true para interceptar eventos de erro de tags <script>
-
-      window.addEventListener('unhandledrejection', function(event) {
-        var reason = event.reason;
-        var msg = reason && (reason.stack || reason.message) ? (reason.stack || reason.message) : String(reason || '');
-        if (msg.indexOf('ResizeObserver') !== -1) return;
-        console.warn('[Global Unhandled Rejection]', reason);
-        window.__LAST_ERROR__ = msg;
-        if (!window.__APP_INITIALIZED__) {
-          window.showGlobalErrorScreen('Erro ao inicializar Sussurro RPG: ' + (reason && reason.message ? reason.message : msg), reason);
-        }
-      });
-
-      // Watchdog de segurança: se o app demorar mais de 3.5s para responder, verifica se houve erro
-      setTimeout(function() {
-        if (!window.__APP_INITIALIZED__) {
-          var btnJoin = document.getElementById('btn-join-room');
-          if (!btnJoin || !btnJoin.dataset.ready) {
-            console.warn('[Watchdog] App ainda não marcou inicialização completa.');
-            if (window.__LAST_ERROR__) {
-              window.showGlobalErrorScreen('O aplicativo encontrou uma falha ao carregar componentes.', window.__LAST_ERROR__);
-            }
-          }
-        }
-      }, 3500);
     })();
   </script>
 </head>
@@ -205,7 +128,7 @@
             <div class="pwa-install-banner-info">
               <div class="pwa-install-icon">📲</div>
               <div>
-                <div class="pwa-install-title">Instalar Sussurro RPG como App (v1.1.5)</div>
+                <div class="pwa-install-title">Instalar Sussurro RPG como App (v1.1.6)</div>
                 <div class="pwa-install-sub">Roda em tela cheia, atualiza sozinho e mantém sua voz ativa em 2º plano. Se o Android exibir aviso do Play Protect, toque em <strong>"Instalar assim mesmo"</strong>.</div>
               </div>
             </div>
@@ -706,6 +629,25 @@
           </div>
 
           <div class="settings-group" style="margin-top: 18px;">
+            <label class="settings-group-title" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700; margin-bottom: 12px; display: block;">Desempenho & Otimização de Hardware</label>
+
+            <!-- Modo Econômico: Pc da Hayfa -->
+            <div class="settings-item-row" style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; margin-bottom: 12px;">
+              <div class="settings-item-info" style="display: flex; flex-direction: column; gap: 4px;">
+                <div style="display: flex; align-items: center; gap: 8px;">
+                  <span class="settings-item-label" style="font-weight: 700; font-size: 13.5px; color: #38bdf8;">Pc da Hayfa</span>
+                  <span class="tag-free" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8; font-size: 10.5px; padding: 2px 7px;">Modo Leve de CPU</span>
+                </div>
+                <span class="settings-item-sub" style="font-size: 11.5px; color: var(--text-muted); line-height: 1.45;">Otimização extrema para computadores modestos e notebooks antigos. Reduz a captura da câmera para 360p / 15-20 FPS, desliga animações pesadas e segmentação de IA para manter o computador rápido, frio e sem travamentos.</span>
+              </div>
+              <label class="toggle-switch" style="flex-shrink: 0;">
+                <input type="checkbox" id="toggle-hayfa-pc-mode">
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-group" style="margin-top: 18px;">
             <label class="settings-group-title" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700; margin-bottom: 12px; display: block;">Áudio e Respostas da Interface</label>
 
             <!-- Sons da Interface -->
@@ -728,7 +670,7 @@
                 <div style="font-weight: 700; font-size: 13.5px; color: #ffffff;" id="general-platform-name">Sussurro RPG</div>
                 <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;" id="general-platform-status">Modo Nativo Desktop com Bandeja</div>
               </div>
-              <span class="update-ready-tag" style="background: rgba(88, 101, 242, 0.15); color: #818cf8; border-color: rgba(88, 101, 242, 0.4); font-size: 12px; padding: 4px 10px; border-radius: 6px;">v1.1.5</span>
+              <span class="update-ready-tag" style="background: rgba(88, 101, 242, 0.15); color: #818cf8; border-color: rgba(88, 101, 242, 0.4); font-size: 12px; padding: 4px 10px; border-radius: 6px;">v1.1.6</span>
             </div>
           </div>
         </div>
@@ -1292,10 +1234,10 @@
                 <div>
                   <div style="font-weight: 700; font-size: 16px; color: var(--text-normal); display: flex; align-items: center; gap: 8px;">
                     <span>Sussurro RPG</span>
-                    <span id="version-pill-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple); font-size: 11px;">v1.1.2</span>
+                    <span id="version-pill-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple); font-size: 11px;">v1.1.6</span>
                   </div>
                   <div style="font-size: 13px; color: var(--text-muted); margin-top: 2px;" id="version-current-text">
-                    Versão atual: <strong>v1.1.2</strong>
+                    Versão atual: <strong>v1.1.6</strong>
                   </div>
                 </div>
               </div>
@@ -1522,7 +1464,7 @@
       <div class="update-ready-content">
         <div class="update-ready-header">
           <h2 class="update-ready-title">Atualização Pronta</h2>
-          <span id="update-modal-version-tag" class="update-ready-tag">v1.1.5</span>
+          <span id="update-modal-version-tag" class="update-ready-tag">v1.1.6</span>
         </div>
 
         <p class="update-ready-desc">
@@ -1576,7 +1518,7 @@
       <div class="update-ready-content">
         <div class="update-ready-header">
           <h2 class="update-ready-title">Instalar Sussurro RPG</h2>
-          <span class="update-ready-tag" style="border-color: rgba(34, 197, 94, 0.45); color: #4ade80; background: rgba(34, 197, 94, 0.15);">v1.1.5</span>
+          <span class="update-ready-tag" style="border-color: rgba(34, 197, 94, 0.45); color: #4ade80; background: rgba(34, 197, 94, 0.15);">v1.1.6</span>
         </div>
 
         <p class="update-ready-desc">
@@ -1615,21 +1557,6 @@
 
   <!-- Elemento de áudio silencioso para Media Session / Keep-Alive em segundo plano no Android -->
   <audio id="bg-keepalive-audio" loop playsinline muted style="display: none;"></audio>
-
-  <!-- Tela Global de Tratamento de Erro (Fail-Safe Anti-Travamento) -->
-  <div id="app-global-error-screen" class="global-error-backdrop hidden" style="z-index: 100001;">
-    <div class="global-error-card">
-      <div class="global-error-icon">⚠️</div>
-      <h3 class="global-error-title">Aviso de Estabilidade da Interface</h3>
-      <p class="global-error-msg" id="global-error-msg-text">Ocorreu um imprevisto na renderização. Seus botões e controles continuam ativos.</p>
-      <div class="global-error-detail-box hidden" id="global-error-detail-box"></div>
-      <div class="global-error-actions">
-        <button type="button" class="btn btn-primary" id="btn-global-error-reload" onclick="window.location.reload()">Recarregar Janela</button>
-        <button type="button" class="btn btn-secondary" id="btn-global-error-toggle-details" onclick="(function(){ var d = document.getElementById('global-error-detail-box'); if (d) d.classList.toggle('hidden'); })()">Ver Detalhes</button>
-        <button type="button" class="btn btn-secondary" id="btn-global-error-dismiss" onclick="(function(){ var s = document.getElementById('app-global-error-screen'); if (s) s.classList.add('hidden'); })()">Continuar</button>
-      </div>
-    </div>
-  </div>
 
   <script type="module" src="./app.js"></script>
 </body>

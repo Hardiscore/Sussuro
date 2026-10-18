@@ -23,7 +23,8 @@ export class VideoEffectsProcessor {
       accessoryConfig: { scale: 100, x: 0, y: -35, anchor: 'head' },
       colorFilter: 'none', // 'none' | 'campfire' | 'dungeon-shadow' | 'parchment' | 'arcane-night'
       isVideoOff: true,
-      rpgGestureMode: true // Preserva braços, mãos e gestos para RPG de mesa sem borrar
+      rpgGestureMode: true, // Preserva braços, mãos e gestos para RPG de mesa sem borrar
+      hayfaPcMode: false
     };
 
     // Imagens e canvas em cache para renderização ultra-rápida (60 FPS)
@@ -401,24 +402,43 @@ export class VideoEffectsProcessor {
     if (this.config.customAccessory && (!this.customAccImage || this.customAccImage.src !== this.config.customAccessory)) {
       this.setCustomAccessory(this.config.customAccessory);
     }
-    // Se ligou desfoque, cenário ou acessório, carrega os modelos se ainda não estiverem prontos
-    const needsSegmentation = this.config.bgPreset !== 'none';
-    const needsFaceTracking = this.config.selectedAccessory && this.config.selectedAccessory !== 'none';
 
-    if ((needsSegmentation || needsFaceTracking) && !this.isSegmentationReady) {
+    const hasBgEffect = this.config.bgPreset && this.config.bgPreset !== 'none';
+    const hasAccessory = this.config.selectedAccessory && this.config.selectedAccessory !== 'none';
+    const hasColorFilter = this.config.colorFilter && this.config.colorFilter !== 'none';
+
+    // Se todos os efeitos estão desligados, economiza 100% de CPU
+    if (!hasBgEffect && !hasAccessory && !hasColorFilter) {
+      this.activePipelines.forEach(p => {
+        if (p.animFrameId) { cancelAnimationFrame(p.animFrameId); clearTimeout(p.animFrameId); }
+        p.animFrameId = null;
+        p.isProcessing = false;
+        p.canvasEl?.classList.add('hidden');
+        if (p.videoEl) p.videoEl.style.display = 'block';
+        if (p.overlayEl) p.overlayEl.classList.add('hidden');
+        if (p.atmoEl) p.atmoEl.classList.add('hidden');
+      });
+      return;
+    }
+
+    // Se ligou desfoque, cenário ou acessório, carrega os modelos apenas agora
+    if ((hasBgEffect || hasAccessory) && !this.isSegmentationReady) {
       this.loadModels().catch(() => {});
     }
 
     // Pré-carrega o acessório selecionado se for imagem
-    if (this.config.selectedAccessory && this.config.selectedAccessory !== 'none') {
+    if (hasAccessory) {
       this.getAccessoryImage(this.config.selectedAccessory);
     }
 
-    // Atualiza classes CSS atmosféricas nas sobreposições
+    // Reativa pipelines caso estivessem pausados
     this.activePipelines.forEach(p => {
+      if (!p.animFrameId && p.videoEl && !p.videoEl.paused) {
+        this.runLoop(p);
+      }
       if (p.atmoEl) {
         p.atmoEl.className = 'atmosphere-overlay';
-        if (this.config.colorFilter && this.config.colorFilter !== 'none') {
+        if (hasColorFilter) {
           p.atmoEl.classList.add(`filter-${this.config.colorFilter}`);
           p.atmoEl.classList.remove('hidden');
         } else {
@@ -530,6 +550,19 @@ export class VideoEffectsProcessor {
     if (!videoEl || !canvasEl) return;
     this.stopPipeline(id);
 
+    const hasBgEffect = this.config.bgPreset && this.config.bgPreset !== 'none';
+    const hasAccessory = this.config.selectedAccessory && this.config.selectedAccessory !== 'none';
+    const hasColorFilter = this.config.colorFilter && this.config.colorFilter !== 'none';
+
+    // Se NÃO há nenhum efeito ativado, mantém vídeo nativo puro (0% de sobrecarga de CPU)
+    if (!hasBgEffect && !hasAccessory && !hasColorFilter) {
+      canvasEl.classList.add('hidden');
+      videoEl.style.display = 'block';
+      if (overlayEl) overlayEl.classList.add('hidden');
+      if (atmoEl) atmoEl.classList.add('hidden');
+      return;
+    }
+
     const pipeline = {
       id,
       videoEl,
@@ -546,7 +579,7 @@ export class VideoEffectsProcessor {
 
     this.activePipelines.set(id, pipeline);
 
-    if (!this.isSegmentationReady || !this.isFaceDetectionReady) {
+    if ((hasBgEffect && !this.isSegmentationReady) || (hasAccessory && !this.isFaceDetectionReady)) {
       this.loadModels().catch(() => {});
     }
 
@@ -578,7 +611,7 @@ export class VideoEffectsProcessor {
   stopPipeline(id) {
     const p = this.activePipelines.get(id);
     if (p) {
-      if (p.animFrameId) cancelAnimationFrame(p.animFrameId);
+      if (p.animFrameId) { cancelAnimationFrame(p.animFrameId); clearTimeout(p.animFrameId); }
       if (p.capturedTrack) {
         try { p.capturedTrack.stop(); } catch (e) {}
         p.capturedTrack = null;
@@ -710,8 +743,9 @@ export class VideoEffectsProcessor {
           canvasEl.classList.remove('hidden');
           videoEl.style.display = 'none';
 
-          // 1. Processamento de IA a cada ~33ms (30 FPS)
-          if (!pipeline.isProcessing && (now - pipeline.lastProcessTime > 32)) {
+          // 1. Processamento de IA a cada ~33ms (ou ~100ms no Pc da Hayfa para economizar CPU)
+          const targetInterval = this.config.hayfaPcMode ? 100 : 32;
+          if (!pipeline.isProcessing && (now - pipeline.lastProcessTime > targetInterval)) {
             pipeline.isProcessing = true;
             pipeline.lastProcessTime = now;
 
@@ -809,7 +843,16 @@ export class VideoEffectsProcessor {
         }
       }
 
-      pipeline.animFrameId = requestAnimationFrame(loop);
+      const c = this.config;
+      const idle = c.bgPreset === 'none' && (!c.selectedAccessory || c.selectedAccessory === 'none') && (!c.colorFilter || c.colorFilter === 'none');
+      if (idle) {
+        // Sem efeitos: não precisa renderizar a cada frame (economia de CPU)
+        pipeline.animFrameId = setTimeout(() => requestAnimationFrame(loop), 300);
+      } else if (c.hayfaPcMode) {
+        pipeline.animFrameId = setTimeout(() => requestAnimationFrame(loop), 50);
+      } else {
+        pipeline.animFrameId = requestAnimationFrame(loop);
+      }
     };
 
     pipeline.animFrameId = requestAnimationFrame(loop);

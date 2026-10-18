@@ -15,6 +15,7 @@ import {
   onChildChanged,
   onChildRemoved, 
   remove, 
+  get,
   onDisconnect 
 } from './firebase-config.js';
 
@@ -121,6 +122,7 @@ export class TavernWebRTC {
     this.hasScreenAudio = false;
     this.selectedAudioDeviceId = options.audioDeviceId || null;
     this.selectedVideoDeviceId = options.videoDeviceId || null;
+    this.hayfaPcMode = options.hayfaPcMode || false;
 
     // Conexões Mesh: peerId -> { connection: RTCPeerConnection, dataChannel, remoteStream, pendingCandidates: [], isPolite: boolean }
     this.peers = new Map();
@@ -175,6 +177,7 @@ export class TavernWebRTC {
     this.onDataMessage = options.onDataMessage || (() => {});
     this.onStatusChange = options.onStatusChange || (() => {});
     this.onNoAudioWarning = options.onNoAudioWarning || (() => {});
+    this.onFirebaseRoomReady = options.onFirebaseRoomReady || null;
     this.onVersionMismatch = options.onVersionMismatch || (() => {});
     this.onDiceBlockedStateChange = options.onDiceBlockedStateChange || (() => {});
   }
@@ -648,6 +651,21 @@ export class TavernWebRTC {
   }
 
   /**
+   * Modo "PC da Hayfa": reduz resolução e FPS da câmera para economizar CPU
+   * em computadores mais antigos.
+   */
+  setHayfaPcMode(enabled) {
+    this.hayfaPcMode = !!enabled;
+    if (this.rawVideoTrack && typeof this.rawVideoTrack.applyConstraints === 'function') {
+      const isHayfa = this.hayfaPcMode;
+      const constraints = isHayfa
+        ? { width: { ideal: 480, max: 480 }, height: { ideal: 360, max: 360 }, frameRate: { ideal: 15, max: 20 } }
+        : { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } };
+      this.rawVideoTrack.applyConstraints(constraints).catch(() => {});
+    }
+  }
+
+  /**
    * Liga ou desliga câmera (adquire dispositivo sob demanda se estava desligada ao entrar)
    */
   async toggleVideo(forceState = null) {
@@ -658,9 +676,20 @@ export class TavernWebRTC {
       if (!videoTrack || videoTrack.readyState === 'ended') {
         let camStream = null;
         try {
+          const isHayfa = !!this.hayfaPcMode;
           const videoConstraints = this.selectedVideoDeviceId
-            ? { deviceId: { exact: this.selectedVideoDeviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
-            : { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } };
+            ? {
+                deviceId: { exact: this.selectedVideoDeviceId },
+                width: isHayfa ? { ideal: 480, max: 480 } : { ideal: 640 },
+                height: isHayfa ? { ideal: 360, max: 360 } : { ideal: 480 },
+                frameRate: isHayfa ? { ideal: 15, max: 20 } : { ideal: 30 }
+              }
+            : {
+                facingMode: 'user',
+                width: isHayfa ? { ideal: 480, max: 480 } : { ideal: 640 },
+                height: isHayfa ? { ideal: 360, max: 360 } : { ideal: 480 },
+                frameRate: isHayfa ? { ideal: 15, max: 20 } : { ideal: 30 }
+              };
 
           camStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
         } catch (err) {
@@ -1280,6 +1309,12 @@ export class TavernWebRTC {
     const roomRef = ref(this.firebaseDb, `rooms/${this.roomId}`);
     const myPeerRef = ref(this.firebaseDb, `rooms/${this.roomId}/peers/${this.myPeerId}`);
 
+    // Se a sala está vazia, apaga chat antigo que possa ter sobrado (ex.: último participante caiu sem sair direito)
+    try {
+      const existing = await get(ref(this.firebaseDb, `rooms/${this.roomId}/peers`));
+      if (!existing.exists()) await remove(ref(this.firebaseDb, `rooms/${this.roomId}/chat`));
+    } catch (e) {}
+
     // Registra presença local
     await set(myPeerRef, {
       id: this.myPeerId,
@@ -1293,6 +1328,9 @@ export class TavernWebRTC {
 
     // Remove do banco ao desconectar
     onDisconnect(myPeerRef).remove();
+    if (typeof this.onFirebaseRoomReady === 'function') { try { this.onFirebaseRoomReady(this.firebaseDb, this.roomId); } catch (e) {} }
+    // Também limpa a caixa de sinais deste peer para não deixar a sala "fantasma" no Firebase
+    try { onDisconnect(ref(this.firebaseDb, `rooms/${this.roomId}/signals/${this.myPeerId}`)).remove(); } catch (e) {}
 
     // Escuta novos peers na sala
     const peersRef = ref(this.firebaseDb, `rooms/${this.roomId}/peers`);
@@ -1335,7 +1373,16 @@ export class TavernWebRTC {
       unsubscribePeerChanged();
       unsubscribePeerRemoved();
       unsubscribeSignals();
-      remove(myPeerRef);
+      const roomId = this.roomId;
+      const db = this.firebaseDb;
+      Promise.resolve(remove(myPeerRef))
+        .then(() => remove(ref(db, `rooms/${roomId}/signals/${this.myPeerId}`)))
+        .then(() => get(ref(db, `rooms/${roomId}/peers`)))
+        .then((snap) => {
+          // Se ninguém sobrou, apaga a sala inteira
+          if (!snap.exists()) return remove(ref(db, `rooms/${roomId}`));
+        })
+        .catch(() => {});
     });
   }
 
@@ -1516,13 +1563,13 @@ export class TavernWebRTC {
 
     // Verificação estrita de versão entre peers
     const peerVersion = peerInfo && peerInfo.appVersion;
-    if (peerVersion && this.appVersion && peerVersion !== this.appVersion) {
+    if (this.appVersion && peerVersion !== this.appVersion) {
       console.warn(`[WebRTC] Incompatibilidade de versão detectada para ${peerId}: v${peerVersion} (sua versão: v${this.appVersion})`);
       if (typeof this.onVersionMismatch === 'function') {
         this.onVersionMismatch({
           peerId,
           peerName: peerInfo.name || 'Aventureiro',
-          peerVersion,
+          peerVersion: peerVersion || 'antiga (sem verificação)',
           yourVersion: this.appVersion
         });
       }
@@ -2464,7 +2511,11 @@ export class TavernWebRTC {
             params.encodings[0].scaleResolutionDownBy = 1.0;
           }
         } else {
-          if (profile === 'low') {
+          if (this.hayfaPcMode) {
+            params.encodings[0].maxBitrate = 160000;
+            params.encodings[0].maxFramerate = 15;
+            params.encodings[0].scaleResolutionDownBy = 1.33;
+          } else if (profile === 'low') {
             params.encodings[0].maxBitrate = 180000;
             params.encodings[0].maxFramerate = 15;
             params.encodings[0].scaleResolutionDownBy = 2.0;

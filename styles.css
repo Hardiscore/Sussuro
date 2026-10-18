@@ -3224,7 +3224,8 @@ main#app-container > section#lobby-screen .lobby-subtitle,
   transition: opacity 0.3s ease;
 }
 
-.atmosphere-overlay.hidden {
+.atmosphere-overlay.hidden,
+.atmosphere-overlay:not([class*="filter-"]) {
   display: none !important;
 }
 
@@ -3259,27 +3260,35 @@ main#app-container > section#lobby-screen .lobby-subtitle,
   100% { opacity: 0.92; }
 }
 
-/* Temas de Cenário de RPG para Tiles em Modo Avatar (Câmera Desligada) */
-.video-tile.bg-tavern-theme,
-.preview-video-box.bg-tavern-theme {
+/* Temas de Cenário de RPG para Tiles em Modo Avatar (Câmera Desligada APENAS) */
+.video-tile.camera-off.bg-tavern-theme,
+.preview-video-box.camera-off.bg-tavern-theme,
+.video-tile:has(.avatar-fallback:not([style*="display: none"])).bg-tavern-theme,
+.preview-video-box:has(.preview-avatar:not([style*="display: none"])).bg-tavern-theme {
   background: radial-gradient(circle at center, rgba(120, 53, 15, 0.45) 0%, rgba(30, 20, 10, 0.95) 100%),
               repeating-linear-gradient(90deg, rgba(69, 26, 3, 0.35) 0px, rgba(69, 26, 3, 0.35) 40px, rgba(40, 15, 2, 0.55) 41px) !important;
 }
 
-.video-tile.bg-dungeon-theme,
-.preview-video-box.bg-dungeon-theme {
+.video-tile.camera-off.bg-dungeon-theme,
+.preview-video-box.camera-off.bg-dungeon-theme,
+.video-tile:has(.avatar-fallback:not([style*="display: none"])).bg-dungeon-theme,
+.preview-video-box:has(.preview-avatar:not([style*="display: none"])).bg-dungeon-theme {
   background: radial-gradient(circle at center, rgba(30, 41, 59, 0.65) 0%, rgba(15, 23, 42, 0.98) 100%),
               radial-gradient(circle at 20% 30%, rgba(240, 178, 50, 0.16) 0%, transparent 45%) !important;
 }
 
-.video-tile.bg-forest-theme,
-.preview-video-box.bg-forest-theme {
+.video-tile.camera-off.bg-forest-theme,
+.preview-video-box.camera-off.bg-forest-theme,
+.video-tile:has(.avatar-fallback:not([style*="display: none"])).bg-forest-theme,
+.preview-video-box:has(.preview-avatar:not([style*="display: none"])).bg-forest-theme {
   background: radial-gradient(circle at center, rgba(6, 78, 59, 0.65) 0%, rgba(2, 44, 34, 0.98) 100%),
               radial-gradient(circle at 80% 20%, rgba(52, 211, 153, 0.22) 0%, transparent 50%) !important;
 }
 
-.video-tile.bg-library-theme,
-.preview-video-box.bg-library-theme {
+.video-tile.camera-off.bg-library-theme,
+.preview-video-box.camera-off.bg-library-theme,
+.video-tile:has(.avatar-fallback:not([style*="display: none"])).bg-library-theme,
+.preview-video-box:has(.preview-avatar:not([style*="display: none"])).bg-library-theme {
   background: radial-gradient(circle at center, rgba(88, 28, 135, 0.55) 0%, rgba(30, 10, 50, 0.98) 100%),
               radial-gradient(circle at 30% 70%, rgba(240, 178, 50, 0.14) 0%, transparent 45%) !important;
 }
@@ -3689,4 +3698,30 @@ video.filter-arcane-night {
   gap: 10px;
   justify-content: center;
   flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   Modo Econômico de CPU: "Pc da Hayfa" (Ultra-Low Hardware Utilization)
+   ========================================================================== */
+.hayfa-mode * {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+}
+
+.hayfa-mode .atmosphere-overlay {
+  animation: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.hayfa-mode .modal-backdrop,
+.hayfa-mode .settings-window,
+.hayfa-mode .preview-container,
+.hayfa-mode .video-tile,
+.hayfa-mode .call-header,
+.hayfa-mode .call-controls-bar {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+  box-shadow: none !important;
 }

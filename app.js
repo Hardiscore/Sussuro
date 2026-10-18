@@ -5,6 +5,7 @@
  * gestão de salas, rolagens de dados de RPG e integração com Electron / WebRTC.
  */
 
+import { RoomChat } from './chat.js';
 import { TavernWebRTC, getSavedIceServers, saveIceServers, DEFAULT_ICE_SERVERS } from './webrtc.js';
 import { getStoredFirebaseConfig, saveFirebaseConfig, resetFirebaseConfig, BUILTIN_FIREBASE_CONFIG } from './firebase-config.js';
 // Importação resiliente de efeitos de vídeo (se o módulo falhar ou faltar, não derruba o app)
@@ -50,7 +51,8 @@ const STORAGE_KEYS = {
   CUSTOM_ACCESSORY: 'tavern_custom_accessory',
   ACCESSORY_CONFIG: 'tavern_accessory_config',
   COLOR_FILTER: 'tavern_color_filter',
-  RPG_GESTURE_MODE: 'tavern_rpg_gesture_mode'
+  RPG_GESTURE_MODE: 'tavern_rpg_gesture_mode',
+  HAYFA_PC_MODE: 'tavern_hayfa_pc_mode'
 };
 
 // ============================================================================
@@ -246,7 +248,8 @@ const StorageService = {
       customAccessory: this.get(STORAGE_KEYS.CUSTOM_ACCESSORY, null),
       accessoryConfig: accCfg,
       colorFilter: this.get(STORAGE_KEYS.COLOR_FILTER, 'none'),
-      rpgGestureMode: this.get(STORAGE_KEYS.RPG_GESTURE_MODE, 'true') !== 'false'
+      rpgGestureMode: this.get(STORAGE_KEYS.RPG_GESTURE_MODE, 'true') !== 'false',
+      hayfaPcMode: this.get(STORAGE_KEYS.HAYFA_PC_MODE, 'false') === 'true'
     };
   },
 
@@ -348,7 +351,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.1.5';
+export const APP_VERSION = '1.1.6';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -401,7 +404,9 @@ const state = {
   customAccessory: savedPrefs.customAccessory,
   accessoryConfig: savedPrefs.accessoryConfig,
   colorFilter: savedPrefs.colorFilter,
-  rpgGestureMode: savedPrefs.rpgGestureMode
+  rpgGestureMode: savedPrefs.rpgGestureMode,
+  // Modo econômico "Pc da Hayfa" (salvo apenas localmente)
+  hayfaPcMode: savedPrefs.hayfaPcMode
 };
 
 // ============================================================================
@@ -647,12 +652,35 @@ function generateRpgRoomName() {
 // ============================================================================
 // INICIALIZAÇÃO DA INTERFACE (Isolamento de Falhas e Resiliência Total)
 // ============================================================================
+const roomChat = new RoomChat(() => state.webrtc);
+
+function setupHayfaPcMode() {
+  const toggle = document.getElementById('toggle-hayfa-pc-mode');
+  const apply = (on) => {
+    state.hayfaPcMode = !!on;
+    document.body.classList.toggle('hayfa-mode', !!on);
+    try { videoEffects.updateConfig({ hayfaPcMode: !!on }); } catch (e) {}
+    if (state.webrtc && typeof state.webrtc.setHayfaPcMode === 'function') {
+      state.webrtc.setHayfaPcMode(!!on);
+    }
+  };
+  apply(state.hayfaPcMode);
+  if (!toggle) return;
+  toggle.checked = !!state.hayfaPcMode;
+  toggle.addEventListener('change', () => {
+    StorageService.set(STORAGE_KEYS.HAYFA_PC_MODE, toggle.checked ? 'true' : 'false');
+    apply(toggle.checked);
+  });
+}
+
 async function initApp() {
   const initModules = [
     { name: 'setupElectronTitlebar', fn: setupElectronTitlebar },
     { name: 'setupPwaAndOfflineSupport', fn: setupPwaAndOfflineSupport },
     { name: 'setupLobbyInputs', fn: setupLobbyInputs },
     { name: 'setupSettingsModal', fn: setupSettingsModal },
+    { name: 'setupHayfaPcMode', fn: setupHayfaPcMode },
+    { name: 'roomChat', fn: () => roomChat.build() },
     { name: 'setupScreenShareModal', fn: setupScreenShareModal },
     { name: 'setupDiceRoller', fn: setupDiceRoller },
     { name: 'setupCallControls', fn: setupCallControls },
@@ -1458,6 +1486,7 @@ async function startCall(roomId) {
     videoDeviceId: state.selectedVideoDeviceId,
     noiseSuppressionMode: state.noiseSuppressionMode,
     noiseGateThreshold: state.noiseGateThreshold,
+    hayfaPcMode: !!state.hayfaPcMode,
 
     onNoAudioWarning: (warningMsg) => {
       showNoAudioWarning(warningMsg);
@@ -1504,7 +1533,10 @@ async function startCall(roomId) {
       updateParticipantCount();
     },
 
+    onFirebaseRoomReady: (db, roomId) => roomChat.attach(db, roomId),
+
     onPeerStreamRemoved: (peerId) => {
+      try { roomChat.peerLeft(peerId); } catch (e) {}
       removePeerTile(peerId);
       removeScreenTile(peerId);
       updateParticipantCount();
@@ -1517,6 +1549,12 @@ async function startCall(roomId) {
     appVersion: APP_VERSION,
 
     onVersionMismatch: (data) => {
+      // Se o problema é OUTRO participante com versão diferente, quem está na sala NÃO deve sair:
+      // apenas ignora o participante incompatível e avisa.
+      if (data && data.peerId) {
+        showLayoutNotification(`⚠️ ${data.peerName || 'Participante'} está com a versão v${data.peerVersion} (a sua é v${data.yourVersion}) e não será conectado.`);
+        return;
+      }
       showVersionMismatchModal(data.yourVersion || APP_VERSION, data.requiredVersion || data.peerVersion || 'Outra Versão');
       leaveCall();
     },
@@ -1556,6 +1594,7 @@ async function startCall(roomId) {
     },
 
     onDataMessage: (peerId, data) => {
+      if (roomChat.handle(peerId, data)) return;
       if (data.type === 'rpg-dice-roll') {
         showDiceRollNotification(data);
       }
@@ -1640,6 +1679,7 @@ async function startCall(roomId) {
 }
 
 function leaveCall() {
+  try { roomChat.reset(); } catch (e) {}
   videoEffects.stopPipeline('local');
   const localVideo = document.getElementById('local-video');
   if (localVideo) {
@@ -2852,8 +2892,11 @@ function triggerSpeechVisuals(isSpeaking) {
 function applyFiltersAndAvatarVisuals() {
   const customImg = state.customAvatar;
 
-  const customBgUrl = state.customBg || (customBackgroundsMap.get(state.bgPreset)?.url) || null;
-  const customAccUrl = state.customAccessory || (customAccessoriesMap.get(state.selectedAccessory)?.url) || null;
+  // Só usa fundo/acessório personalizado se o efeito correspondente estiver realmente ativo
+  const bgActive = state.bgPreset && state.bgPreset !== 'none';
+  const accActive = state.selectedAccessory && state.selectedAccessory !== 'none';
+  const customBgUrl = !bgActive ? null : (customBackgroundsMap.get(state.bgPreset)?.url || (state.bgPreset === 'custom' ? state.customBg : null) || null);
+  const customAccUrl = !accActive ? null : (customAccessoriesMap.get(state.selectedAccessory)?.url || (state.selectedAccessory === 'custom' ? state.customAccessory : null) || null);
 
   // 1. Atualiza configuração no processador de vídeo com IA
   videoEffects.updateConfig({
@@ -2864,7 +2907,8 @@ function applyFiltersAndAvatarVisuals() {
     accessoryConfig: state.accessoryConfig,
     colorFilter: state.colorFilter,
     isVideoOff: state.isVideoOff,
-    rpgGestureMode: state.rpgGestureMode !== false
+    rpgGestureMode: state.rpgGestureMode !== false,
+    hayfaPcMode: !!state.hayfaPcMode
   });
 
   // Sincroniza faixa de vídeo com efeitos/desfoque para outros participantes da chamada WebRTC
@@ -5593,14 +5637,14 @@ function setupPwaAndOfflineSupport() {
 
   // Registra Service Worker com checagem imediata de atualização (updateViaCache: 'none')
   if (!isElectron && 'serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+    const isPreviewOrIframe = (window.self !== window.top) || (typeof window !== 'undefined' && window.location.hostname.includes('run.app'));
+
     let refreshingSw = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (refreshingSw) return;
+      if (refreshingSw || isPreviewOrIframe) return;
       refreshingSw = true;
       if (!state.isInCall) {
-        window.location.reload();
-      } else {
-        showLayoutNotification('✨ Nova versão baixada! Será aplicada automaticamente ao sair da chamada.');
+        showLayoutNotification('✨ Sussurro RPG atualizado com sucesso em segundo plano!');
       }
     });
 
@@ -5622,13 +5666,15 @@ function setupPwaAndOfflineSupport() {
         .catch(() => {});
     });
 
-    // Checa versão ao abrir e a cada 60 segundos enquanto no Lobby
-    checkPwaAutoUpdate(true);
-    setInterval(() => {
-      if (!state.isInCall) {
-        checkPwaAutoUpdate(true);
-      }
-    }, 60000);
+    // Em ambiente de preview/iframe (AI Studio), nunca faz auto-reload forçado
+    if (!isPreviewOrIframe) {
+      checkPwaAutoUpdate(true);
+      setInterval(() => {
+        if (!state.isInCall) {
+          checkPwaAutoUpdate(true);
+        }
+      }, 60000);
+    }
   }
 
   // Atualiza status caso já esteja rodando como PWA instalado (Standalone)
@@ -5701,7 +5747,27 @@ function setupPwaAndOfflineSupport() {
     showLayoutNotification('🎉 Sussurro RPG instalado com sucesso como Aplicativo!');
   });
 
-  const handleInstallClick = async () => {
+  const installModal = document.getElementById('app-install-ready-modal');
+  const btnInstallConfirm = document.getElementById('btn-install-modal-confirm');
+  const btnInstallDismiss = document.getElementById('btn-install-modal-dismiss');
+  const btnCloseInstallModal = document.getElementById('btn-close-install-modal');
+
+  const showAppInstallReadyModal = () => {
+    if (installModal) {
+      installModal.classList.remove('hidden');
+    } else {
+      handleDirectInstallPrompt();
+    }
+  };
+
+  const closeInstallReadyModal = () => {
+    if (installModal) installModal.classList.add('hidden');
+  };
+
+  if (btnCloseInstallModal) btnCloseInstallModal.onclick = closeInstallReadyModal;
+  if (btnInstallDismiss) btnInstallDismiss.onclick = closeInstallReadyModal;
+
+  const handleDirectInstallPrompt = async () => {
     if (deferredPwaPrompt) {
       try {
         await deferredPwaPrompt.prompt();
@@ -5719,6 +5785,17 @@ function setupPwaAndOfflineSupport() {
     if (guideModal) {
       guideModal.classList.remove('hidden');
     }
+  };
+
+  if (btnInstallConfirm) {
+    btnInstallConfirm.onclick = () => {
+      closeInstallReadyModal();
+      handleDirectInstallPrompt();
+    };
+  }
+
+  const handleInstallClick = () => {
+    showAppInstallReadyModal();
   };
 
   if (btnTitlebarInstall) btnTitlebarInstall.onclick = handleInstallClick;
@@ -5800,6 +5877,10 @@ async function checkPwaAutoUpdate(autoReload = true) {
   const isElectron = !!(window.electronAPI && window.electronAPI.isElectron);
   if (isElectron || !window.location.protocol.startsWith('http')) return false;
 
+  // Em iframe ou preview de desenvolvimento (AI Studio / Cloud Run), não executa recargas automáticas
+  const isPreviewOrIframe = (window.self !== window.top) || (typeof window !== 'undefined' && window.location.hostname.includes('run.app'));
+  if (isPreviewOrIframe) return false;
+
   try {
     if ('serviceWorker' in navigator) {
       const reg = await navigator.serviceWorker.getRegistration();
@@ -5816,17 +5897,24 @@ async function checkPwaAutoUpdate(autoReload = true) {
 
     const data = await res.json();
     const serverVersion = (data?.version || '').trim();
-    if (serverVersion && serverVersion !== APP_VERSION) {
+    // Atualiza APENAS se a versão do servidor for comprovadamente MAIOR que a versão do app atual
+    if (serverVersion && typeof compareVersions === 'function' && compareVersions(serverVersion, APP_VERSION) > 0) {
       console.log(`[PWA AutoUpdate] Nova versão detectada no servidor: v${serverVersion} (atual: v${APP_VERSION})`);
       if ('caches' in window) {
         const keys = await caches.keys();
         await Promise.all(keys.map(k => caches.delete(k)));
       }
+      const lastReload = sessionStorage.getItem('last_pwa_update_reload');
+      if (lastReload === serverVersion) {
+        return false;
+      }
+      sessionStorage.setItem('last_pwa_update_reload', serverVersion);
+
       if (autoReload && !state.isInCall) {
         showLayoutNotification(`🚀 Atualizando Sussurro para v${serverVersion}...`);
         setTimeout(() => {
           window.location.reload();
-        }, 600);
+        }, 800);
       }
       return true;
     }
