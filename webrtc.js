@@ -833,6 +833,7 @@ export class TavernWebRTC {
 
     try {
       let stream = null;
+      let appAudioOk = false;
 
       // Se executando no Electron e o usuário escolheu uma fonte específica pelo ID do desktopCapturer
       if (sourceId && window.electronAPI) {
@@ -853,8 +854,13 @@ export class TavernWebRTC {
               frameRate: { ideal: frameRate, max: 60 }
             }
           };
-          if (includeAudio && isScreen) {
-            displayOpts.audio = true;
+          // Janela de aplicativo no Windows: tenta capturar SÓ o áudio daquele app (módulo nativo).
+          // Se não der, cai para o áudio do sistema inteiro.
+          if (includeAudio && sourceType === 'window') {
+            appAudioOk = await this.startAppAudio(sourceId);
+          }
+          if (includeAudio && !appAudioOk) {
+            displayOpts.audio = { suppressLocalAudioPlayback: true };
           }
           stream = await navigator.mediaDevices.getDisplayMedia(displayOpts);
         } catch (displayMediaErr) {
@@ -863,7 +869,7 @@ export class TavernWebRTC {
 
         // 2. Se getDisplayMedia não retornou stream, tenta o método getUserMedia clássico do desktopCapturer
         if (!stream) {
-          if (includeAudio && isScreen) {
+          if (includeAudio) {
             try {
               stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
@@ -943,6 +949,11 @@ export class TavernWebRTC {
         }
       }
 
+      // Junta a faixa de áudio do aplicativo (se capturamos por app) ao stream de tela
+      if (appAudioOk && this.appAudio && this.appAudio.track) {
+        try { stream.addTrack(this.appAudio.track); } catch (e) {}
+      }
+
       this.screenStream = stream;
       this.screenStreamId = stream.id;
       const screenVideoTrack = stream.getVideoTracks()[0];
@@ -1016,6 +1027,7 @@ export class TavernWebRTC {
       return true;
     } catch (err) {
       console.error('[WebRTC] Erro ao iniciar compartilhamento de tela:', err);
+      this.teardownAppAudio();
       if (typeof showLayoutNotification === 'function') {
         showLayoutNotification('Erro ao iniciar transmissão: ' + (err.message || 'Permissão negada ou não suportada'));
       }
@@ -1026,8 +1038,96 @@ export class TavernWebRTC {
   /**
    * Encerra a transmissão de tela e restaura a webcam e o microfone originais
    */
+  /**
+   * Captura o áudio de UM aplicativo (Windows) via processo principal do Electron e o transforma
+   * numa faixa de áudio (MediaStreamTrack) pronta para enviar na chamada.
+   */
+  async startAppAudio(sourceId) {
+    this.teardownAppAudio();
+    const api = window.electronAPI;
+    if (!api || typeof api.startAppAudio !== 'function' || typeof api.onAppAudioChunk !== 'function') return false;
+    try {
+      const res = await api.startAppAudio(sourceId);
+      if (!res || !res.ok) {
+        console.log('[WebRTC] Áudio por aplicativo indisponível, usando áudio do sistema:', res && res.reason);
+        return false;
+      }
+      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+      const workletCode = `
+        class AppAudioProcessor extends AudioWorkletProcessor {
+          constructor() {
+            super();
+            this.queue = [];
+            this.offset = 0;
+            this.queued = 0;
+            this.port.onmessage = (e) => {
+              this.queue.push(e.data);
+              this.queued += e.data.length / 2;
+              // Mantém no máximo ~1s de áudio acumulado (descarta o mais antigo)
+              while (this.queued > 48000 && this.queue.length > 1) {
+                const d = this.queue.shift();
+                this.queued -= (d.length / 2) - (this.offset / 2);
+                this.offset = 0;
+              }
+            };
+          }
+          process(inputs, outputs) {
+            const out = outputs[0];
+            const L = out[0], R = out[1] || out[0];
+            for (let i = 0; i < L.length; i++) {
+              if (!this.queue.length) { L[i] = 0; R[i] = 0; continue; }
+              const cur = this.queue[0];
+              L[i] = cur[this.offset];
+              R[i] = cur[this.offset + 1];
+              this.offset += 2;
+              this.queued -= 1;
+              if (this.offset >= cur.length) { this.queue.shift(); this.offset = 0; }
+            }
+            return true;
+          }
+        }
+        registerProcessor('app-audio-processor', AppAudioProcessor);
+      `;
+      const url = URL.createObjectURL(new Blob([workletCode], { type: 'application/javascript' }));
+      await ctx.audioWorklet.addModule(url);
+      URL.revokeObjectURL(url);
+      const node = new AudioWorkletNode(ctx, 'app-audio-processor', { numberOfInputs: 0, outputChannelCount: [2] });
+      const dest = ctx.createMediaStreamDestination();
+      node.connect(dest);
+      const unsubscribe = api.onAppAudioChunk((chunk) => {
+        try {
+          const bytes = new Uint8Array(chunk);          // cópia alinhada
+          const ints = new Int16Array(bytes.buffer, 0, Math.floor(bytes.byteLength / 2));
+          const floats = new Float32Array(ints.length);
+          for (let i = 0; i < ints.length; i++) floats[i] = ints[i] / 32768;
+          node.port.postMessage(floats, [floats.buffer]);
+        } catch (e) {}
+      });
+      const track = dest.stream.getAudioTracks()[0];
+      this.appAudio = { ctx, node, unsubscribe, track };
+      console.log('[WebRTC] Áudio por aplicativo ativo (processo ' + res.pid + ')');
+      return !!track;
+    } catch (err) {
+      console.warn('[WebRTC] Falha no áudio por aplicativo, usando áudio do sistema:', err);
+      this.teardownAppAudio();
+      return false;
+    }
+  }
+
+  teardownAppAudio() {
+    const a = this.appAudio;
+    this.appAudio = null;
+    try { if (window.electronAPI && window.electronAPI.stopAppAudio) window.electronAPI.stopAppAudio(); } catch (e) {}
+    if (!a) return;
+    try { a.unsubscribe && a.unsubscribe(); } catch (e) {}
+    try { a.track && a.track.stop(); } catch (e) {}
+    try { a.node && a.node.disconnect(); } catch (e) {}
+    try { a.ctx && a.ctx.close(); } catch (e) {}
+  }
+
   async stopScreenShare() {
     if (!this.isScreenSharing) return false;
+    this.teardownAppAudio();
 
     this.isScreenSharing = false;
     this.hasScreenAudio = false;

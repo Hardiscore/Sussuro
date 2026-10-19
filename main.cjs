@@ -122,7 +122,8 @@ function createWindow() {
         if (chosen) {
           const isScreen = chosen.id.startsWith('screen:');
           const result = { video: chosen };
-          if (isScreen && request.audioRequested) {
+          if (request.audioRequested) {
+            // Áudio do sistema (loopback) também para janelas: o Windows não isola o som por aplicativo
             result.audio = 'loopback';
           }
           callback(result);
@@ -463,6 +464,66 @@ ipcMain.on('open-external', (event, url) => {
 // Suporte para capturar janelas/telas no Electron
 let currentSelectedSourceId = null;
 
+// ============================================================================
+// ÁUDIO POR APLICATIVO (Windows 10 2004+): captura só o som da janela compartilhada
+// Usa o módulo nativo "loopback-capture" (WASAPI process loopback). Se não estiver disponível,
+// o renderer cai automaticamente para o áudio do sistema inteiro.
+// ============================================================================
+let appAudioCapture = null;
+
+function getWindowPidFromSourceId(sourceId) {
+  return new Promise((resolve) => {
+    const match = /^window:(\d+):/.exec(String(sourceId || ''));
+    if (!match || process.platform !== 'win32') return resolve(null);
+    const hwnd = match[1];
+    const { execFile } = require('child_process');
+    const script = `(Get-Process | Where-Object { [int64]$_.MainWindowHandle -eq ${hwnd} } | Select-Object -First 1).Id`;
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { timeout: 6000, windowsHide: true }, (err, stdout) => {
+      const pid = parseInt(String(stdout || '').trim(), 10);
+      resolve(!err && pid > 0 ? pid : null);
+    });
+  });
+}
+
+function stopAppAudioCapture() {
+  if (appAudioCapture) {
+    try { appAudioCapture.stop(); } catch (e) {}
+    appAudioCapture = null;
+  }
+}
+
+ipcMain.handle('app-audio-start', async (event, sourceId) => {
+  stopAppAudioCapture();
+  if (process.platform !== 'win32') return { ok: false, reason: 'platform' };
+  let loopback;
+  try {
+    loopback = require('loopback-capture');
+  } catch (err) {
+    console.warn('[AppAudio] loopback-capture não carregou:', err.message);
+    return { ok: false, reason: 'module' };
+  }
+  const pid = await getWindowPidFromSourceId(sourceId);
+  if (!pid) return { ok: false, reason: 'pid' };
+  try {
+    const Cap = (loopback.default && loopback.default.LoopbackCapture) || loopback.LoopbackCapture;
+    appAudioCapture = new Cap();
+    const target = event.sender;
+    appAudioCapture.start(pid, true, (chunk) => {
+      if (!target.isDestroyed()) target.send('app-audio-chunk', chunk);
+    });
+    console.log('[AppAudio] Capturando áudio do processo', pid);
+    return { ok: true, pid };
+  } catch (err) {
+    console.warn('[AppAudio] Falha ao iniciar captura por aplicativo:', err);
+    stopAppAudioCapture();
+    return { ok: false, reason: 'start' };
+  }
+});
+
+ipcMain.on('app-audio-stop', () => stopAppAudioCapture());
+app.on('will-quit', () => stopAppAudioCapture());
+
+
 ipcMain.on('set-selected-source-id', (event, sourceId) => {
   currentSelectedSourceId = sourceId;
 });
@@ -499,6 +560,26 @@ ipcMain.handle('get-desktop-settings', () => {
     minimizeToTray,
     openAtLogin
   };
+});
+
+// Aviso de mensagens não lidas do Chat Geral no ícone da barra de tarefas
+ipcMain.on('set-unread-badge', (_event, payload) => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const count = (payload && payload.count) || 0;
+  try {
+    if (count > 0 && payload.image) {
+      const img = nativeImage.createFromDataURL(payload.image);
+      if (process.platform === 'win32') mainWindow.setOverlayIcon(img, `${count} mensagem(ns) nova(s)`);
+      if (typeof app.setBadgeCount === 'function' && process.platform !== 'win32') app.setBadgeCount(count);
+      if (!mainWindow.isFocused()) mainWindow.flashFrame(true);
+    } else {
+      if (process.platform === 'win32') mainWindow.setOverlayIcon(null, '');
+      if (typeof app.setBadgeCount === 'function' && process.platform !== 'win32') app.setBadgeCount(0);
+      mainWindow.flashFrame(false);
+    }
+  } catch (e) {
+    console.warn('[Badge] Falha ao atualizar aviso no ícone:', e);
+  }
 });
 
 ipcMain.on('set-minimize-to-tray', (_event, enabled) => {
@@ -813,6 +894,17 @@ ipcMain.on('register-global-hotkey', (event, { key, mode }) => {
   const accelerator = convertToAccelerator(key);
   if (!accelerator) {
     console.warn(`[GlobalHotkey] Tecla inválida para acelerador: ${key}`);
+    return;
+  }
+
+  // Teclas "de digitar" (Espaço, letras, números, =, Enter...) NÃO podem ser registradas via globalShortcut:
+  // o sistema operacional engole a tecla e ela para de funcionar em todos os programas (inclusive no chat do Sussurro).
+  // Para elas usamos apenas o ouvinte passivo (RawInput), que enxerga a tecla sem bloqueá-la.
+  const isSafeForOsGrab = /^F([1-9]|1[0-9]|2[0-4])$/i.test(accelerator) ||
+    accelerator.includes('+') ||
+    ['Insert', 'Home', 'End', 'PageUp', 'PageDown'].includes(accelerator);
+  if (!isSafeForOsGrab) {
+    console.log(`[GlobalHotkey] "${accelerator}" é tecla de digitação: usando apenas ouvinte passivo (não bloqueia a digitação).`);
     return;
   }
 

@@ -128,7 +128,7 @@
             <div class="pwa-install-banner-info">
               <div class="pwa-install-icon">📲</div>
               <div>
-                <div class="pwa-install-title">Instalar Sussurro RPG como App (v1.1.6)</div>
+                <div class="pwa-install-title">Instalar Sussurro RPG como App (v1.1.7)</div>
                 <div class="pwa-install-sub">Roda em tela cheia, atualiza sozinho e mantém sua voz ativa em 2º plano. Se o Android exibir aviso do Play Protect, toque em <strong>"Instalar assim mesmo"</strong>.</div>
               </div>
             </div>
@@ -300,10 +300,10 @@
           <div class="room-name-badge">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5865f2" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             <span id="call-room-title">Sala RPG</span>
-            <span class="room-tag" id="call-participant-count">1/15 Participantes</span>
+            <span class="room-tag" id="call-participant-count" data-tooltip="Participantes na sala">1/15</span>
           </div>
 
-          <button class="btn btn-secondary" id="btn-copy-room-id" style="padding: 6px 12px; font-size: 12px;" title="Copiar ID da Sala">
+          <button class="btn btn-secondary" id="btn-copy-room-id" hidden style="display:none;padding: 6px 12px; font-size: 12px;" title="Copiar ID da Sala">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             <span>Copiar ID</span>
           </button>
@@ -332,27 +332,27 @@
             </div>
 
             <!-- Compartilhar Tela -->
-            <button class="control-btn" id="btn-share-screen" data-tooltip="Compartilhar Tela / Mapa" type="button">
+            <button class="control-btn" id="btn-share-screen" data-tooltip="Compartilhar tela" type="button">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
             </button>
 
             <!-- Filtros & Avatar RPG -->
-            <button class="control-btn" id="btn-open-filters" data-tooltip="Filtros & Avatar RPG" type="button">
+            <button class="control-btn" id="btn-open-filters" data-tooltip="Filtros e Avatar" type="button">
               <span style="font-size: 16px; line-height: 1;">🎭</span>
             </button>
 
             <!-- Dados de RPG -->
-            <button class="control-btn" id="btn-toggle-dice-panel" data-tooltip="Abrir Dados de RPG" type="button">
+            <button class="control-btn" id="btn-toggle-dice-panel" data-tooltip="Dados de RPG" type="button">
               <span style="font-size: 15px; line-height: 1;">🎲</span>
             </button>
 
             <!-- Configurações -->
-            <button class="control-btn" id="btn-control-settings" data-tooltip="Configurações (STUN/TURN)" type="button">
+            <button class="control-btn" id="btn-control-settings" data-tooltip="Configurações" type="button">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
             </button>
 
             <!-- Sair da Sala -->
-            <button class="control-btn leave-btn" id="btn-leave-call" data-tooltip="Desconectar" type="button">
+            <button class="control-btn leave-btn" id="btn-leave-call" data-tooltip="Sair da sala" type="button">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-3.33-2.67m-2.67-3.34a19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/><line x1="23" y1="1" x2="1" y2="23"/></svg>
             </button>
 
@@ -360,21 +360,21 @@
         </div>
 
         <div class="header-meta">
-          <div class="connection-indicator">
+          <div class="connection-indicator" style="display:none;">
             <div class="indicator-dot" id="call-ice-dot"></div>
             <span id="call-ice-status">WebRTC Conectado</span>
           </div>
 
           <!-- Indicador de Wake Lock / Segundo Plano Ativo (Mobile / PWA) -->
-          <div class="wakelock-badge hidden" id="call-wakelock-badge" title="Tela mantida acesa e áudio protegido em segundo plano">
+          <div class="wakelock-badge hidden" style="display:none !important;" id="call-wakelock-badge" title="Tela mantida acesa e áudio protegido em segundo plano">
             <span>🛡️ Voz Ativa</span>
           </div>
 
           <!-- Seletor de Modo de Exibição / Layout -->
           <div class="layout-selector-wrapper" style="position: relative;">
-            <button class="btn btn-secondary" id="btn-toggle-layout-menu" style="padding: 6px 12px; font-size: 13px;" title="Alternar Layout de Vídeo (Atalho: L)" type="button">
+            <button class="btn btn-secondary" id="btn-toggle-layout-menu" style="padding: 6px 12px; font-size: 13px;" data-tooltip="Modo de exibição (atalho: L)" type="button">
               <span id="layout-active-icon">🔀</span>
-              <span id="layout-active-label">Grid Móvel</span>
+              <span id="layout-active-label">Grid</span>
               <span style="font-size: 10px; margin-left: 4px; color: var(--text-muted);">▾</span>
             </button>
             <div id="layout-dropdown-menu" class="layout-dropdown hidden">
@@ -416,12 +416,12 @@
             <span>👑 Silenciar Todos</span>
           </button>
 
-          <button class="btn btn-secondary" id="btn-quick-dice" style="padding: 6px 12px; font-size: 13px; color: var(--accent-gold); border-color: rgba(240, 178, 50, 0.4);" type="button">
+          <button class="btn btn-secondary" id="btn-quick-dice" hidden style="display:none !important;padding: 6px 12px; font-size: 13px; color: var(--accent-gold); border-color: rgba(240, 178, 50, 0.4);" type="button">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
             <span>Rolar D20</span>
           </button>
 
-          <button class="btn btn-secondary btn-icon-only" id="btn-call-settings" title="Configurações" type="button">
+          <button class="btn btn-secondary btn-icon-only" id="btn-call-settings" data-tooltip="Configurações" title="Configurações" type="button">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
           </button>
         </div>
@@ -629,6 +629,30 @@
           </div>
 
           <div class="settings-group" style="margin-top: 18px;">
+            <label class="settings-group-title" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700; margin-bottom: 12px; display: block;">Notificações do Chat Geral</label>
+            <div class="settings-item-row" style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; margin-bottom: 12px;">
+              <div class="settings-item-info" style="display: flex; flex-direction: column; gap: 4px;">
+                <span class="settings-item-label" style="font-weight: 600; font-size: 13.5px; color: var(--text-bright);">Aviso no ícone do app</span>
+                <span class="settings-item-sub" style="font-size: 11.5px; color: var(--text-muted); line-height: 1.45;">Mostra um contador vermelho no ícone da barra de tarefas (e no título da janela) quando chegam mensagens novas no Chat Geral.</span>
+              </div>
+              <label class="toggle-switch" style="flex-shrink: 0;">
+                <input type="checkbox" id="toggle-lobby-notify-visual" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+            <div class="settings-item-row" style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; margin-bottom: 12px;">
+              <div class="settings-item-info" style="display: flex; flex-direction: column; gap: 4px;">
+                <span class="settings-item-label" style="font-weight: 600; font-size: 13.5px; color: var(--text-bright);">Som de nova mensagem</span>
+                <span class="settings-item-sub" style="font-size: 11.5px; color: var(--text-muted); line-height: 1.45;">Toca um alerta curto quando chega mensagem no Chat Geral. Fica silencioso enquanto você está numa chamada.</span>
+              </div>
+              <label class="toggle-switch" style="flex-shrink: 0;">
+                <input type="checkbox" id="toggle-lobby-notify-sound" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+
+          <div class="settings-group" style="margin-top: 18px;">
             <label class="settings-group-title" style="font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 700; margin-bottom: 12px; display: block;">Desempenho & Otimização de Hardware</label>
 
             <!-- Modo Econômico: Pc da Hayfa -->
@@ -670,7 +694,7 @@
                 <div style="font-weight: 700; font-size: 13.5px; color: #ffffff;" id="general-platform-name">Sussurro RPG</div>
                 <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;" id="general-platform-status">Modo Nativo Desktop com Bandeja</div>
               </div>
-              <span class="update-ready-tag" style="background: rgba(88, 101, 242, 0.15); color: #818cf8; border-color: rgba(88, 101, 242, 0.4); font-size: 12px; padding: 4px 10px; border-radius: 6px;">v1.1.6</span>
+              <span class="update-ready-tag" style="background: rgba(88, 101, 242, 0.15); color: #818cf8; border-color: rgba(88, 101, 242, 0.4); font-size: 12px; padding: 4px 10px; border-radius: 6px;">v1.1.7</span>
             </div>
           </div>
         </div>
@@ -1234,10 +1258,10 @@
                 <div>
                   <div style="font-weight: 700; font-size: 16px; color: var(--text-normal); display: flex; align-items: center; gap: 8px;">
                     <span>Sussurro RPG</span>
-                    <span id="version-pill-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple); font-size: 11px;">v1.1.6</span>
+                    <span id="version-pill-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple); font-size: 11px;">v1.1.7</span>
                   </div>
                   <div style="font-size: 13px; color: var(--text-muted); margin-top: 2px;" id="version-current-text">
-                    Versão atual: <strong>v1.1.6</strong>
+                    Versão atual: <strong>v1.1.7</strong>
                   </div>
                 </div>
               </div>
@@ -1464,7 +1488,7 @@
       <div class="update-ready-content">
         <div class="update-ready-header">
           <h2 class="update-ready-title">Atualização Pronta</h2>
-          <span id="update-modal-version-tag" class="update-ready-tag">v1.1.6</span>
+          <span id="update-modal-version-tag" class="update-ready-tag">v1.1.7</span>
         </div>
 
         <p class="update-ready-desc">
@@ -1518,7 +1542,7 @@
       <div class="update-ready-content">
         <div class="update-ready-header">
           <h2 class="update-ready-title">Instalar Sussurro RPG</h2>
-          <span class="update-ready-tag" style="border-color: rgba(34, 197, 94, 0.45); color: #4ade80; background: rgba(34, 197, 94, 0.15);">v1.1.6</span>
+          <span class="update-ready-tag" style="border-color: rgba(34, 197, 94, 0.45); color: #4ade80; background: rgba(34, 197, 94, 0.15);">v1.1.7</span>
         </div>
 
         <p class="update-ready-desc">

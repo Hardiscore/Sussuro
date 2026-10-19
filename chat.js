@@ -51,6 +51,9 @@ const CSS = `
 #chat-lightbox .lb-actions a, #chat-lightbox .lb-actions button { background: rgba(0,0,0,.6); color: #fff; border: 1px solid #fff3; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer; text-decoration: none; }
 .chat-file img.chat-thumb { cursor: zoom-in; }
 .chat-text a { color: var(--accent-blurple, #7289ff); text-decoration: underline; }
+#chat-panel.chat-drop-active { outline: 2px dashed var(--accent-blurple, #5865f2); outline-offset: -6px; }
+#chat-panel.chat-drop-active #chat-messages::after { content: 'Solte o arquivo para compartilhar'; position: sticky; bottom: 0; align-self: center;
+  background: var(--accent-blurple, #5865f2); color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 12px; }
 #chat-form { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--border-subtle, #3f4147); align-items: center; }
 #chat-input { flex: 1; min-width: 0; background: var(--bg-input, #1e1f22); color: var(--text-primary, #f2f3f5);
   border: 1px solid var(--border-subtle, #3f4147); border-radius: 8px; padding: 7px 10px; font-size: 13px; outline: none; }
@@ -123,7 +126,7 @@ export class RoomChat {
     panel.className = 'hidden';
     panel.innerHTML = `
       <div class="chat-head"><span>💬 Chat da sala</span><button type="button" id="chat-min-btn" title="Minimizar">—</button></div>
-      <div id="chat-messages"><div class="chat-empty">Mensagens e arquivos só existem enquanto a sala está aberta.</div></div>
+      <div id="chat-messages"><div class="chat-empty">Mensagens e arquivos só existem enquanto a sala está aberta. Arraste um arquivo para cá para compartilhar.</div></div>
       <form id="chat-form" autocomplete="off">
         <button type="button" id="chat-attach-btn" title="Enviar arquivo (até 200 MB)">📎</button>
         <input id="chat-input" type="text" maxlength="1000" placeholder="Mensagem..." />
@@ -148,6 +151,38 @@ export class RoomChat {
     // Atalhos do app (PTT etc.) não devem disparar enquanto digita
     panel.addEventListener('keydown', (e) => e.stopPropagation());
     panel.addEventListener('keyup', (e) => e.stopPropagation());
+
+    // Arrastar e soltar arquivos: no painel do chat ou em qualquer lugar da tela da chamada
+    const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
+    const inCall = () => {
+      const cs = document.getElementById('call-screen');
+      return !!this.getWebrtc() && cs && !cs.classList.contains('hidden');
+    };
+    let dragDepth = 0;
+    document.addEventListener('dragenter', (e) => {
+      if (!hasFiles(e) || !inCall()) return;
+      dragDepth++;
+      this.toggle(true);
+      panel.classList.add('chat-drop-active');
+    });
+    document.addEventListener('dragleave', (e) => {
+      if (!hasFiles(e) || !inCall()) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) panel.classList.remove('chat-drop-active');
+    });
+    document.addEventListener('dragover', (e) => {
+      if (!hasFiles(e) || !inCall()) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    document.addEventListener('drop', (e) => {
+      if (!hasFiles(e) || !inCall()) return;
+      e.preventDefault();
+      dragDepth = 0;
+      panel.classList.remove('chat-drop-active');
+      const files = Array.from(e.dataTransfer.files || []);
+      files.slice(0, 5).forEach((f) => this.offerFile(f));
+    });
   }
 
   get panel() { return document.getElementById('chat-panel'); }
@@ -532,7 +567,7 @@ export class RoomChat {
     this.unread = 0;
     this.updateBadge();
     const l = this.list;
-    if (l) l.innerHTML = '<div class="chat-empty">Mensagens e arquivos só existem enquanto a sala está aberta.</div>';
+    if (l) l.innerHTML = '<div class="chat-empty">Mensagens e arquivos só existem enquanto a sala está aberta. Arraste um arquivo para cá para compartilhar.</div>';
     this.toggle(false);
   }
 }

@@ -1639,6 +1639,19 @@ main#app-container > section#lobby-screen .lobby-subtitle,
   opacity: 1;
 }
 
+/* No cabeçalho da chamada o balão aparece ABAIXO do botão (acima ele ficava cortado pela borda da janela) */
+.call-header [data-tooltip]::after {
+  bottom: auto;
+  top: calc(100% + 10px);
+  z-index: 2000;
+}
+.call-header .header-meta [data-tooltip]::after,
+.call-header #btn-call-settings[data-tooltip]::after {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 8px;

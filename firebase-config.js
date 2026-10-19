@@ -206,6 +206,14 @@ export function onChildRemoved(refObj, callback) {
   return () => {};
 }
 
+// Consulta apenas os N últimos itens (ordenados pela chave)
+export function queryLast(refObj, n) {
+  if (fbDbModule && refObj && typeof fbDbModule.query === 'function' && typeof fbDbModule.limitToLast === 'function') {
+    return fbDbModule.query(refObj, fbDbModule.limitToLast(n));
+  }
+  return refObj;
+}
+
 export function remove(refObj) {
   if (fbDbModule && refObj && typeof fbDbModule.remove === 'function') {
     return fbDbModule.remove(refObj);

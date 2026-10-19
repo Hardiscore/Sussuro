@@ -19,6 +19,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openExternal: (url) => ipcRenderer.send('open-external', url),
   getDesktopSources: () => ipcRenderer.invoke('get-desktop-sources'),
   setSelectedSourceId: (sourceId) => ipcRenderer.send('set-selected-source-id', sourceId),
+  startAppAudio: (sourceId) => ipcRenderer.invoke('app-audio-start', sourceId),
+  stopAppAudio: () => ipcRenderer.send('app-audio-stop'),
+  onAppAudioChunk: (callback) => {
+    const handler = (_event, chunk) => callback(chunk);
+    ipcRenderer.on('app-audio-chunk', handler);
+    return () => ipcRenderer.removeListener('app-audio-chunk', handler);
+  },
 
   // Atalhos Globais de Sistema (Push-to-Talk e Muto mesmo com janela minimizada ou em segundo plano)
   registerGlobalHotkey: (config) => ipcRenderer.send('register-global-hotkey', config),
@@ -104,6 +111,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDesktopSettings: () => ipcRenderer.invoke('get-desktop-settings'),
   setMinimizeToTray: (enabled) => ipcRenderer.send('set-minimize-to-tray', enabled),
   setOpenAtLogin: (enabled) => ipcRenderer.send('set-open-at-login', enabled),
+  setUnreadBadge: (payload) => ipcRenderer.send('set-unread-badge', payload),
   getCustomAssets: () => ipcRenderer.invoke('get-custom-assets')
 });
 

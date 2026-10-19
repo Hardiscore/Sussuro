@@ -6,6 +6,7 @@
  */
 
 import { RoomChat } from './chat.js';
+import { LobbyChat } from './lobby-chat.js';
 import { TavernWebRTC, getSavedIceServers, saveIceServers, DEFAULT_ICE_SERVERS } from './webrtc.js';
 import { getStoredFirebaseConfig, saveFirebaseConfig, resetFirebaseConfig, BUILTIN_FIREBASE_CONFIG } from './firebase-config.js';
 // Importação resiliente de efeitos de vídeo (se o módulo falhar ou faltar, não derruba o app)
@@ -351,7 +352,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.1.6';
+export const APP_VERSION = '1.1.7';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -653,6 +654,79 @@ function generateRpgRoomName() {
 // INICIALIZAÇÃO DA INTERFACE (Isolamento de Falhas e Resiliência Total)
 // ============================================================================
 const roomChat = new RoomChat(() => state.webrtc);
+const lobbyChat = new LobbyChat({
+  getName: () => (document.getElementById('input-user-name')?.value || state.userName || 'Aventureiro').trim().slice(0, 32),
+  isInCall: () => !!state.isInCall,
+  openLightbox: (url, name) => roomChat.openLightbox(url, name),
+  notify: (msg) => showLayoutNotification(msg)
+});
+
+// Configurações de desktop (Iniciar com o Windows / Minimizar para a bandeja) + pergunta única de inicialização
+const KEY_AUTOSTART_ASKED = 'tavern_autostart_asked';
+const KEY_MINIMIZE_TRAY = 'tavern_minimize_to_tray';
+
+async function setupDesktopSettings() {
+  const api = window.electronAPI;
+  if (!api || typeof api.getDesktopSettings !== 'function') return;
+  const toggleLogin = document.getElementById('toggle-open-at-login');
+  const toggleTray = document.getElementById('toggle-minimize-to-tray');
+
+  let settings = { openAtLogin: false, minimizeToTray: true };
+  try { settings = await api.getDesktopSettings(); } catch (e) {}
+
+  // Minimizar para a bandeja: preferência salva localmente e reenviada a cada abertura
+  const savedTray = StorageService.get(KEY_MINIMIZE_TRAY, null);
+  const trayOn = savedTray === null ? settings.minimizeToTray !== false : savedTray === 'true';
+  if (typeof api.setMinimizeToTray === 'function') api.setMinimizeToTray(trayOn);
+  if (toggleTray) {
+    toggleTray.checked = trayOn;
+    toggleTray.addEventListener('change', () => {
+      StorageService.set(KEY_MINIMIZE_TRAY, toggleTray.checked ? 'true' : 'false');
+      api.setMinimizeToTray(toggleTray.checked);
+    });
+  }
+
+  if (toggleLogin) {
+    toggleLogin.checked = !!settings.openAtLogin;
+    toggleLogin.addEventListener('change', () => {
+      api.setOpenAtLogin(toggleLogin.checked);
+      StorageService.set(KEY_AUTOSTART_ASKED, 'true');
+    });
+  }
+
+  // Pergunta UMA vez se a pessoa quer iniciar o Sussurro com o Windows
+  if (api.platform === 'win32' && !settings.openAtLogin && StorageService.get(KEY_AUTOSTART_ASKED, null) !== 'true') {
+    setTimeout(() => showAutostartPrompt(api, toggleLogin), 1500);
+  }
+}
+
+function showAutostartPrompt(api, toggleLogin) {
+  if (document.getElementById('autostart-prompt')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'autostart-prompt';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML = `
+    <div style="background:var(--bg-sidebar,#2b2d31);border:1px solid var(--border-subtle,#3f4147);border-radius:12px;max-width:380px;width:100%;padding:20px;box-shadow:0 12px 40px rgba(0,0,0,.5);">
+      <div style="font-size:16px;font-weight:700;color:var(--text-bright,#f2f3f5);margin-bottom:8px;">Iniciar o Sussurro com o Windows?</div>
+      <div style="font-size:13px;color:var(--text-muted,#949ba4);line-height:1.5;margin-bottom:18px;">Assim o app já fica aberto quando você liga o computador, e você não perde mensagens do Chat Geral.</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;">
+        <button type="button" class="btn btn-secondary" id="autostart-no">Agora não</button>
+        <button type="button" class="btn btn-primary" id="autostart-yes">Sim, iniciar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const close = () => { StorageService.set(KEY_AUTOSTART_ASKED, 'true'); overlay.remove(); };
+  overlay.querySelector('#autostart-yes').onclick = () => {
+    api.setOpenAtLogin(true);
+    if (toggleLogin) toggleLogin.checked = true;
+    close();
+    showLayoutNotification('✅ O Sussurro vai iniciar junto com o Windows. Dá para mudar em Configurações > Geral.');
+  };
+  overlay.querySelector('#autostart-no').onclick = () => {
+    close();
+    showLayoutNotification('Tudo bem! Se mudar de ideia, ative em Configurações > Geral > Iniciar com o Windows.');
+  };
+}
 
 function setupHayfaPcMode() {
   const toggle = document.getElementById('toggle-hayfa-pc-mode');
@@ -681,6 +755,8 @@ async function initApp() {
     { name: 'setupSettingsModal', fn: setupSettingsModal },
     { name: 'setupHayfaPcMode', fn: setupHayfaPcMode },
     { name: 'roomChat', fn: () => roomChat.build() },
+    { name: 'lobbyChat', fn: () => { lobbyChat.init(); } },
+    { name: 'setupDesktopSettings', fn: () => { setupDesktopSettings(); } },
     { name: 'setupScreenShareModal', fn: setupScreenShareModal },
     { name: 'setupDiceRoller', fn: setupDiceRoller },
     { name: 'setupCallControls', fn: setupCallControls },
@@ -1218,9 +1294,11 @@ async function initLobbyPreview(fromUserGesture = false) {
       ? { deviceId: { ideal: state.selectedVideoDeviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
       : { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } };
 
+    // A prévia de câmera do lobby foi substituída pelo Chat Geral: pede só o microfone (economiza CPU e não liga a webcam)
+    void videoConstraints;
     const bothStream = await navigator.mediaDevices.getUserMedia({
       audio: audioConstraints,
-      video: videoConstraints
+      video: false
     });
 
     bothStream.getAudioTracks().forEach(t => {
@@ -1243,8 +1321,8 @@ async function initLobbyPreview(fromUserGesture = false) {
       console.warn('[Lobby] Microfone ainda não liberado:', audioErr);
     }
 
-    // 3. Fallback separado: tenta apenas Vídeo (Câmera)
-    try {
+    // 3. (Desativado) Câmera não é mais usada na tela inicial
+    if (false) try {
       const videoOnly = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
       videoOnly.getVideoTracks().forEach(t => {
         combinedStream.addTrack(t);
@@ -1516,10 +1594,12 @@ async function startCall(roomId) {
     },
 
     onLocalScreenStreamReady: (stream) => {
+      screenViewers.clear();
       addOrUpdateScreenTile('local', { name: state.userName + ' (Você)' }, stream);
     },
 
     onScreenShareEnded: () => {
+      screenViewers.clear();
       removeScreenTile('local');
     },
 
@@ -1537,6 +1617,7 @@ async function startCall(roomId) {
 
     onPeerStreamRemoved: (peerId) => {
       try { roomChat.peerLeft(peerId); } catch (e) {}
+      if (screenViewers.delete(peerId)) updateScreenViewerBadge();
       removePeerTile(peerId);
       removeScreenTile(peerId);
       updateParticipantCount();
@@ -1595,6 +1676,16 @@ async function startCall(roomId) {
 
     onDataMessage: (peerId, data) => {
       if (roomChat.handle(peerId, data)) return;
+      if (data && data.type === 'screen-view-state') {
+        if (data.watching) {
+          const peerName = (state.webrtc && state.webrtc.peers.get(peerId)?.peerInfo?.name) || data.name || 'Aventureiro';
+          screenViewers.set(peerId, peerName);
+        } else {
+          screenViewers.delete(peerId);
+        }
+        updateScreenViewerBadge();
+        return;
+      }
       if (data.type === 'rpg-dice-roll') {
         showDiceRollNotification(data);
       }
@@ -2035,6 +2126,33 @@ function removePeerTile(peerId) {
   scheduleGridLayoutUpdate();
 }
 
+// ---------- Quem está assistindo a MINHA transmissão de tela ----------
+const screenViewers = new Map(); // peerId -> nome
+
+function updateScreenViewerBadge() {
+  const el = document.getElementById('screen-viewers-badge');
+  if (!el) return;
+  const names = Array.from(screenViewers.values());
+  el.textContent = `👁 ${names.length}`;
+  el.title = names.length ? `Assistindo: ${names.join(', ')}` : 'Ninguém assistindo no momento';
+}
+
+// Avisa quem transmite se eu estou (ou deixei de estar) assistindo a tela dele
+function notifyScreenViewing(sharerId, watching, attempt = 0) {
+  try {
+    const peer = state.webrtc && state.webrtc.peers.get(sharerId);
+    const dc = peer && peer.dataChannel;
+    if (dc && dc.readyState === 'open') {
+      dc.send(JSON.stringify({ type: 'screen-view-state', watching: !!watching, name: state.userName }));
+    } else if (watching && attempt < 8) {
+      // Canal de dados ainda abrindo: tenta de novo em 1s
+      setTimeout(() => {
+        if (document.getElementById(`tile-${sharerId}-screen`)) notifyScreenViewing(sharerId, true, attempt + 1);
+      }, 1000);
+    }
+  } catch (e) {}
+}
+
 function addOrUpdateScreenTile(peerId, peerInfo, stream) {
   const grid = document.getElementById('video-grid');
   if (!grid) return;
@@ -2056,6 +2174,7 @@ function addOrUpdateScreenTile(peerId, peerInfo, stream) {
         <div style="display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
           <span class="participant-name">🖥️ ${escapeHtml(titleName)}</span>
           <span class="screen-audio-badge" id="badge-audio-screen-${peerId}"></span>
+          ${peerId === 'local' ? '<span id="screen-viewers-badge" style="font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 10px; background: rgba(0,0,0,0.45); cursor: default;" title="Ninguém assistindo no momento">👁 0</span>' : ''}
         </div>
         <div class="tile-status-icons" style="display: flex; gap: 6px; align-items: center;">
           ${peerId !== 'local' ? `
@@ -2080,6 +2199,11 @@ function addOrUpdateScreenTile(peerId, peerInfo, stream) {
       </div>
     `;
     grid.appendChild(tile);
+    if (peerId === 'local') {
+      updateScreenViewerBadge();
+    } else {
+      notifyScreenViewing(peerId, true);
+    }
 
     const btnUnmute = tile.querySelector(`#btn-unmute-screen-${peerId}`);
     if (btnUnmute) {
@@ -2223,6 +2347,7 @@ function addOrUpdateScreenTile(peerId, peerInfo, stream) {
 
 function removeScreenTile(peerId) {
   const tile = document.getElementById(`tile-${peerId}-screen`);
+  if (tile && peerId !== 'local') notifyScreenViewing(peerId, false);
   if (tile) {
     const video = tile.querySelector('video');
     const audio = tile.querySelector('audio');
@@ -2433,7 +2558,7 @@ function updateParticipantCount() {
   const realTiles = grid.querySelectorAll('.video-tile:not(.empty-slot)').length;
   const countEl = document.getElementById('call-participant-count');
   if (countEl) {
-    countEl.textContent = `${realTiles}/${MAX_PARTICIPANTS} Aventureiros`;
+    countEl.textContent = `${realTiles}/${MAX_PARTICIPANTS}`;
   }
 
   // Define total de elementos a acomodar no grid:
@@ -2573,9 +2698,9 @@ function applyGridLayout(layoutMode, notifyUser = false) {
   const iconSpan = document.getElementById('layout-active-icon') || document.getElementById('current-layout-icon');
   const textSpan = document.getElementById('layout-active-label') || document.getElementById('current-layout-text');
   const layoutLabels = {
-    movel: { icon: '🔀', text: 'Grid Móvel' },
-    fixo: { icon: '🏛️', text: 'Grid Fixo' },
-    destaque: { icon: '⭐', text: 'Grid Destaque' }
+    movel: { icon: '🔀', text: 'Grid' },
+    fixo: { icon: '🏛️', text: 'Fixo' },
+    destaque: { icon: '⭐', text: 'Destaque' }
   };
 
   if (iconSpan) iconSpan.textContent = layoutLabels[layoutMode].icon;
@@ -3305,6 +3430,24 @@ function syncGlobalHotkeyWithElectron() {
   }
 }
 
+// Tecla "de digitar" (espaço, letras, números...) usada como atalho: ignorada enquanto a pessoa escreve num campo de texto
+function isTypingHotkey(k) {
+  const key = String(k || '').toLowerCase();
+  if (!key || key.includes('+') || key.startsWith('mouse') || key.startsWith('btn') || key === 'middle') return false;
+  if (/^f([1-9]|1[0-9]|2[0-4])$/.test(key)) return false;
+  return !['insert', 'home', 'end', 'pageup', 'pagedown'].includes(key);
+}
+
+function isTypingInField() {
+  const el = document.activeElement;
+  return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
+}
+
+function shouldIgnoreKeyHotkey(payload) {
+  if (payload && (payload.button !== undefined && payload.button !== null)) return false; // botão de mouse
+  return isTypingHotkey(state.micHotkey) && isTypingInField() && !state.isRecordingHotkey;
+}
+
 function setupKeyboardShortcuts() {
   // Registra o atalho global no sistema operacional via Electron
   syncGlobalHotkeyWithElectron();
@@ -3314,6 +3457,7 @@ function setupKeyboardShortcuts() {
     if (typeof window.electronAPI.onGlobalHotkeyAction === 'function') {
       window.electronAPI.onGlobalHotkeyAction((action) => {
         if (!action) return;
+        if (shouldIgnoreKeyHotkey(action)) return;
 
         if (action.type === 'toggle-mute') {
           const now = Date.now();
@@ -3330,7 +3474,8 @@ function setupKeyboardShortcuts() {
 
     // Canais IPC dedicados de Push to Talk e Toggle (suportando teclado e botões extras de mouse via uIOhook)
     if (typeof window.electronAPI.onPushToTalkStart === 'function') {
-      window.electronAPI.onPushToTalkStart(() => {
+      window.electronAPI.onPushToTalkStart((d) => {
+        if (shouldIgnoreKeyHotkey(d)) return;
         handlePttDown();
       });
     }
@@ -3342,7 +3487,8 @@ function setupKeyboardShortcuts() {
     }
 
     if (typeof window.electronAPI.onPushToTalkToggle === 'function') {
-      window.electronAPI.onPushToTalkToggle(() => {
+      window.electronAPI.onPushToTalkToggle((d) => {
+        if (shouldIgnoreKeyHotkey(d)) return;
         const now = Date.now();
         if (now - lastToggleTime < 280) return;
         lastToggleTime = now;
@@ -5990,10 +6136,11 @@ function startBackgroundAudioKeepAlive(roomId) {
         title: `Sala RPG: ${roomId}`,
         artist: `${state.userName} (${state.userRole === 'mestre' ? 'Mestre' : 'Jogador'})`,
         album: 'Sussurro RPG — Chamada de Voz Ativa',
-        artwork: [
+        // No .exe (file://) o caminho absoluto não existe; só define o ícone quando roda como site (http/https)
+        artwork: /^https?:$/.test(location.protocol) ? [
           { src: '/pwa-192x192.png', sizes: '192x192', type: 'image/png' },
           { src: '/pwa-512x512.png', sizes: '512x512', type: 'image/png' }
-        ]
+        ] : []
       });
       navigator.mediaSession.playbackState = 'playing';
 
