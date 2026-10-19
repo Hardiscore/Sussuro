@@ -352,7 +352,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.1.7';
+export const APP_VERSION = '1.1.8';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -5294,6 +5294,8 @@ function setupVersionSettingsTab(modal) {
 
       // --- MODO DESKTOP ELECTRON ---
       try {
+        updaterState = 'checking';
+        updaterError = null;
         if (typeof window.electronAPI.checkForUpdatesManual === 'function') {
           window.electronAPI.checkForUpdatesManual();
         }
@@ -5312,26 +5314,14 @@ function setupVersionSettingsTab(modal) {
           if (isNewer) {
             latestGhReleaseTag = latestTag;
             const exeAsset = Array.isArray(release.assets) && release.assets.find(a => a.name && a.name.toLowerCase().endsWith('.exe'));
-            const hasLatestYml = Array.isArray(release.assets) && release.assets.some(a => a.name === 'latest.yml');
-            if (exeAsset) {
-              latestGhExeUrl = exeAsset.browser_download_url;
+            ghHasLatestYml = Array.isArray(release.assets) && release.assets.some(a => a.name === 'latest.yml');
+            latestGhExeUrl = exeAsset ? exeAsset.browser_download_url : null;
+            if (latestGhExeUrl && btnDirectDownloadExe) {
+              btnDirectDownloadExe.href = latestGhExeUrl;
+              btnDirectDownloadExe.classList.remove('hidden');
             }
-
-            if (!exeAsset) {
-              setFeedback('⚠️', `Versão <strong>v${latestTag}</strong> encontrada no GitHub, porém o instalador (.exe e latest.yml) ainda não foi anexado à Release pelo GitHub Actions. Tente novamente em alguns instantes.`, 'warn');
-              if (progressWrapper) progressWrapper.classList.add('hidden');
-            } else {
-              if (btnDirectDownloadExe) {
-                btnDirectDownloadExe.href = exeAsset.browser_download_url;
-                btnDirectDownloadExe.classList.remove('hidden');
-              }
-              if (hasLatestYml) {
-                setFeedback('📦', `Nova versão <strong>v${latestTag}</strong> encontrada no GitHub! Baixando atualização em segundo plano...`, 'info');
-              } else {
-                setFeedback('📦', `Nova versão <strong>v${latestTag}</strong> encontrada no GitHub! Clique no botão abaixo para baixar o instalador oficial:`, 'success');
-              }
-            }
-          } else {
+            showUpdaterOutcome();
+          } else if (!updaterState || updaterState === 'checking' || updaterState === 'not-available') {
             setFeedback('✅', `O Sussurro RPG já está atualizado na versão mais recente (<strong>v${currentAppVersion}</strong>).`, 'success');
             if (progressWrapper) progressWrapper.classList.add('hidden');
           }
@@ -5349,6 +5339,43 @@ function setupVersionSettingsTab(modal) {
 
   let latestGhReleaseTag = null;
   let latestGhExeUrl = null;
+  let ghHasLatestYml = false;
+  // Estado do atualizador automático (electron-updater): null | checking | available | downloading | downloaded | not-available | error | missing
+  let updaterState = null;
+  let updaterError = null;
+  const logLink = ' <a href="#" class="open-updater-log" style="color: var(--accent-blurple); text-decoration: underline;">abrir registro de atualização</a>';
+
+  // Decide a mensagem combinando o resultado do GitHub com o do atualizador automático (sem um sobrescrever o outro)
+  function showUpdaterOutcome() {
+    const hasNewer = latestGhReleaseTag && compareVersions(latestGhReleaseTag, currentAppVersion) > 0;
+    if (updaterState === 'downloaded' || updaterState === 'available' || updaterState === 'downloading') return; // já tratado pelos eventos
+    if (updaterState === 'error') {
+      setFeedback('⚠️', `A atualização automática falhou: <strong>${escapeHtml(updaterError || 'erro desconhecido')}</strong>.${hasNewer && latestGhExeUrl ? ' Baixe o instalador pelo botão abaixo.' : ''}${logLink}`, 'warn');
+      if (progressWrapper) progressWrapper.classList.add('hidden');
+      return;
+    }
+    if (updaterState === 'missing') {
+      setFeedback('⚠️', `O atualizador automático não carregou neste computador (${escapeHtml(updaterError || 'motivo desconhecido')}).${hasNewer ? ` Versão <strong>v${latestGhReleaseTag}</strong> disponível: baixe pelo botão abaixo.` : ''}${logLink}`, 'warn');
+      return;
+    }
+    if (!hasNewer) return;
+    if (!latestGhExeUrl) {
+      setFeedback('⚠️', `Versão <strong>v${latestGhReleaseTag}</strong> encontrada no GitHub, porém o instalador ainda não foi anexado à Release. Tente novamente em alguns instantes.`, 'warn');
+      return;
+    }
+    if (updaterState === 'not-available') {
+      setFeedback('⚠️', `Versão <strong>v${latestGhReleaseTag}</strong> existe no GitHub, mas o atualizador automático não a reconheceu${ghHasLatestYml ? '' : ' (falta o latest.yml na Release)'}. Baixe pelo botão abaixo.${logLink}`, 'warn');
+      return;
+    }
+    setFeedback('📦', `Nova versão <strong>v${latestGhReleaseTag}</strong> encontrada! Aguardando o atualizador automático iniciar o download...`, 'info');
+  }
+
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest && e.target.closest('.open-updater-log');
+    if (!link) return;
+    e.preventDefault();
+    if (window.electronAPI && typeof window.electronAPI.openUpdaterLog === 'function') window.electronAPI.openUpdaterLog();
+  });
 
   // Ouvintes de eventos do Electron AutoUpdater
   if (isElectronApp) {
@@ -5361,6 +5388,7 @@ function setupVersionSettingsTab(modal) {
     if (typeof window.electronAPI.onUpdateAvailable === 'function') {
       window.electronAPI.onUpdateAvailable((info) => {
         const newVer = info?.version || '';
+        updaterState = 'available';
         latestGhReleaseTag = newVer;
         setFeedback('📦', `Nova versão <strong>v${newVer}</strong> detectada! Baixando atualização em segundo plano...`, 'success');
         if (progressWrapper) progressWrapper.classList.remove('hidden');
@@ -5369,6 +5397,7 @@ function setupVersionSettingsTab(modal) {
 
     if (typeof window.electronAPI.onUpdateProgress === 'function') {
       window.electronAPI.onUpdateProgress((progress) => {
+        updaterState = 'downloading';
         if (progressWrapper) progressWrapper.classList.remove('hidden');
         const pct = Math.round(progress.percent || 0);
         if (progressPct) progressPct.textContent = `${pct}%`;
@@ -5382,6 +5411,7 @@ function setupVersionSettingsTab(modal) {
     if (typeof window.electronAPI.onUpdateDownloaded === 'function') {
       window.electronAPI.onUpdateDownloaded((info) => {
         const newVer = info?.version || '';
+        updaterState = 'downloaded';
         setFeedback('🎉', `Atualização <strong>v${newVer}</strong> pronta para instalação!`, 'success');
         if (progressWrapper) progressWrapper.classList.add('hidden');
         if (btnInstallNow) btnInstallNow.classList.remove('hidden');
@@ -5390,15 +5420,21 @@ function setupVersionSettingsTab(modal) {
     }
 
     if (typeof window.electronAPI.onUpdateNotAvailable === 'function') {
-      window.electronAPI.onUpdateNotAvailable(() => {
-        // Se a consulta à API do GitHub já encontrou uma versão mais recente, não sobrescreve com "já atualizado"
+      window.electronAPI.onUpdateNotAvailable((info) => {
+        if (info && info.reason === 'updater-missing') {
+          updaterState = 'missing';
+          updaterError = info.error || null;
+          showUpdaterOutcome();
+          return;
+        }
+        if (info && info.reason === 'dev') {
+          updaterState = 'not-available';
+          setFeedback('ℹ️', 'Modo de desenvolvimento: a atualização automática só funciona no app instalado (.exe).', 'info');
+          return;
+        }
+        updaterState = 'not-available';
         if (latestGhReleaseTag && compareVersions(latestGhReleaseTag, currentAppVersion) > 0) {
-          setFeedback('📦', `Nova versão <strong>v${latestGhReleaseTag}</strong> disponível no GitHub! Você pode baixar o instalador oficial diretamente pelo botão abaixo:`, 'info');
-          if (progressWrapper) progressWrapper.classList.add('hidden');
-          if (btnDirectDownloadExe && latestGhExeUrl) {
-            btnDirectDownloadExe.href = latestGhExeUrl;
-            btnDirectDownloadExe.classList.remove('hidden');
-          }
+          showUpdaterOutcome();
           return;
         }
         setFeedback('✅', `O Sussurro RPG já está atualizado na versão mais recente (<strong>v${currentAppVersion}</strong>).`, 'success');
@@ -5409,14 +5445,10 @@ function setupVersionSettingsTab(modal) {
     if (typeof window.electronAPI.onUpdateError === 'function') {
       window.electronAPI.onUpdateError((err) => {
         console.warn('[AutoUpdater] Evento de erro:', err);
+        updaterState = 'error';
+        updaterError = err?.message || 'Falha no download';
         if (progressWrapper) progressWrapper.classList.add('hidden');
-        if (latestGhReleaseTag && compareVersions(latestGhReleaseTag, currentAppVersion) > 0) {
-          setFeedback('⚠️', `O instalador automático encontrou uma restrição na rede (${err?.message || 'Falha no download'}). Baixe o instalador oficial diretamente pelo botão abaixo:`, 'warn');
-          if (btnDirectDownloadExe && latestGhExeUrl) {
-            btnDirectDownloadExe.href = latestGhExeUrl;
-            btnDirectDownloadExe.classList.remove('hidden');
-          }
-        }
+        showUpdaterOutcome();
       });
     }
   }

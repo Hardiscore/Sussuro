@@ -18,12 +18,42 @@ let tray = null;
 
 // Suporte a Atualização Automática via GitHub Releases (electron-updater)
 let autoUpdater = null;
+let autoUpdaterLoadError = null;
 try {
   const updaterModule = require('electron-updater');
   autoUpdater = updaterModule.autoUpdater;
 } catch (e) {
+  autoUpdaterLoadError = e.message;
   console.warn('[AutoUpdater] electron-updater não carregado:', e.message);
 }
+
+// Registro das atualizações em arquivo (pasta do app: %APPDATA%/<app>/updater.log) para diagnóstico
+function getUpdaterLogPath() {
+  try { return require('path').join(require('electron').app.getPath('userData'), 'updater.log'); } catch (e) { return null; }
+}
+function updaterLog(level, ...args) {
+  const line = `[${new Date().toISOString()}] [${level}] ` + args.map((a) => {
+    if (a instanceof Error) return a.stack || a.message;
+    if (typeof a === 'object') { try { return JSON.stringify(a); } catch (e) { return String(a); } }
+    return String(a);
+  }).join(' ') + '\n';
+  try {
+    const fsMod = require('fs');
+    const p = getUpdaterLogPath();
+    if (p) {
+      // Mantém o arquivo pequeno (máx. ~512 KB)
+      try { if (fsMod.statSync(p).size > 512 * 1024) fsMod.writeFileSync(p, ''); } catch (e) {}
+      fsMod.appendFileSync(p, line);
+    }
+  } catch (e) {}
+  (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(line.trim());
+}
+const updaterFileLogger = {
+  info: (...a) => updaterLog('info', ...a),
+  warn: (...a) => updaterLog('warn', ...a),
+  error: (...a) => updaterLog('error', ...a),
+  debug: () => {}
+};
 
 // Otimizações para funcionamento em segundo plano (evita travamentos ao minimizar ou dar Alt+Tab)
 app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
@@ -308,7 +338,8 @@ app.whenReady().then(() => {
       autoUpdater.autoInstallOnAppQuit = true;
       autoUpdater.disableDifferentialDownload = true; // Força download completo para evitar erro de blockmap/range no GitHub
       autoUpdater.disableWebInstaller = true;
-      autoUpdater.logger = console;
+      autoUpdater.logger = updaterFileLogger;
+      updaterLog('info', `App v${app.getVersion()} iniciado; verificando atualizações.`);
 
       autoUpdater.setFeedURL({
         provider: 'github',
@@ -342,8 +373,8 @@ app.whenReady().then(() => {
       });
 
       autoUpdater.on('error', (err) => {
-        console.warn('[AutoUpdater] Erro no autoUpdater:', err.message);
-        sendToRenderer('app-update-error', { message: err.message });
+        updaterLog('error', 'Erro no autoUpdater:', err);
+        sendToRenderer('app-update-error', { message: err.message, logPath: getUpdaterLogPath() });
       });
 
       // Aguarda o HTML carregar antes de checar atualizações para não perder eventos IPC
@@ -351,7 +382,7 @@ app.whenReady().then(() => {
         mainWindow.webContents.once('did-finish-load', () => {
           setTimeout(() => {
             autoUpdater.checkForUpdatesAndNotify().catch((err) => {
-              console.warn('[AutoUpdater] Falha na chamada checkForUpdatesAndNotify:', err.message);
+              updaterLog('error', 'Falha em checkForUpdatesAndNotify:', err);
             });
           }, 1500);
         });
@@ -407,17 +438,20 @@ ipcMain.on('check-for-updates-manual', async () => {
         }
       }
     } catch (err) {
-      console.warn('[AutoUpdater] Erro na checagem manual:', err.message);
+      updaterLog('error', 'Erro na checagem manual:', err);
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('app-update-error', { message: err.message });
+        mainWindow.webContents.send('app-update-error', { message: err.message, logPath: getUpdaterLogPath() });
       }
     }
   } else {
+    if (app.isPackaged) updaterLog('error', 'Atualizador indisponível:', autoUpdaterLoadError || 'desconhecido');
     setTimeout(() => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('app-update-not-available', {
           version: app.getVersion(),
-          isDev: !app.isPackaged
+          isDev: !app.isPackaged,
+          reason: app.isPackaged ? 'updater-missing' : 'dev',
+          error: autoUpdaterLoadError
         });
       }
     }, 800);
@@ -425,6 +459,15 @@ ipcMain.on('check-for-updates-manual', async () => {
 });
 
 // Ação para reiniciar e aplicar a nova versão baixada
+ipcMain.on('open-updater-log', () => {
+  const p = getUpdaterLogPath();
+  if (!p) return;
+  try {
+    if (!fs.existsSync(p)) fs.writeFileSync(p, '');
+    shell.showItemInFolder(p);
+  } catch (e) {}
+});
+
 ipcMain.on('restart-and-install-update', () => {
   if (autoUpdater) {
     console.log('[AutoUpdater] Executando quitAndInstall(true, true) modo silencioso...');

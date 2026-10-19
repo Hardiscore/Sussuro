@@ -6,3 +6,7 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Arquivos locais que não devem ir para o GitHub
+firebase config.txt
+preload-1.cjs

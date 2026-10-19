@@ -106,6 +106,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('app-update-error', handler);
   },
   restartAndInstallUpdate: () => ipcRenderer.send('restart-and-install-update'),
+  openUpdaterLog: () => ipcRenderer.send('open-updater-log'),
 
   // Configurações de Desktop (Bandeja do Sistema e Inicialização com Windows)
   getDesktopSettings: () => ipcRenderer.invoke('get-desktop-settings'),
