@@ -41,6 +41,7 @@ App de chamadas de voz/vídeo para grupos de RPG entre amigos (substituto do Dis
 ## Versão e publicação
 - A versão aparece em: `package.json`, `app.js` (`APP_VERSION`), `index.html` (vários lugares), `server.ts` e `public/sw.js`.
 - Publicar: commit + push + tag `vX.Y.Z` → GitHub Actions (`.github/workflows/release.yml`) gera a release com `latest.yml`, `.exe` e `.blockmap`.
+- Quando o dono pedir para **mudar a versão e dar commit/push**, fazer o processo completo de lançamento: atualizar a versão em todos os lugares, commit, push **e** criar/enviar a tag `vX.Y.Z` (sem perguntar de novo).
 - **Atenção:** a tag precisa apontar para um commit que já tenha todos os arquivos (a v1.1.7 saiu sem `lobby-chat.js`).
 
 ## Pendências / ideias anotadas
