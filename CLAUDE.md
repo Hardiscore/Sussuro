@@ -42,6 +42,8 @@ App de chamadas de voz/vídeo para grupos de RPG entre amigos (substituto do Dis
 - A versão aparece em: `package.json`, `app.js` (`APP_VERSION`), `index.html` (vários lugares), `server.ts` e `public/sw.js`.
 - Publicar: commit + push + tag `vX.Y.Z` → GitHub Actions (`.github/workflows/release.yml`) gera a release com `latest.yml`, `.exe` e `.blockmap`.
 - Quando o dono pedir para **mudar a versão e dar commit/push**, fazer o processo completo de lançamento: atualizar a versão em todos os lugares, commit, push **e** criar/enviar a tag `vX.Y.Z` (sem perguntar de novo).
+- O site/PWA é publicado no **Firebase Hosting** (`sussurro-4ef44`, pasta `dist/` do `vite build`) pelo job `deploy-site` do mesmo workflow (secret `FIREBASE_SERVICE_ACCOUNT`). Sem servidor: rotas `/api/*` dão 404 e o app trata como modo estático. Deploy manual: `npx vite build` + `npx firebase-tools deploy --only hosting`.
+- O botão "Baixar para Windows" (`/api/download/windows`) é um redirect no `firebase.json` para `releases/latest/download/Sussurro-RPG-Setup.exe`: se mudar o `nsis.artifactName`, atualizar o redirect.
 - **Atenção:** a tag precisa apontar para um commit que já tenha todos os arquivos (a v1.1.7 saiu sem `lobby-chat.js`).
 
 ## Pendências / ideias anotadas

@@ -10,3 +10,6 @@ coverage/
 # Arquivos locais que não devem ir para o GitHub
 firebase config.txt
 preload-1.cjs
+
+# Cache local do Firebase CLI (deploy do site)
+.firebase/

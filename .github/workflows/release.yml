@@ -62,3 +62,30 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           make_latest: true
           draft: false
+
+  # Publica o site/PWA no Firebase Hosting (job separado: se falhar, não afeta o instalador)
+  deploy-site:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Baixar Código do Repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # --ignore-scripts: o site não precisa de Electron nem dos módulos nativos do desktop
+      - name: Instalar Dependências
+        run: npm ci --ignore-scripts
+
+      - name: Compilar Site (Vite)
+        run: npx vite build
+
+      - name: Publicar no Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: sussurro-4ef44
+          channelId: live
