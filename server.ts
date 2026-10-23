@@ -1,4 +1,4 @@
-import express, { Request, Response } from "express";
+import express, { type Request, type Response } from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
@@ -272,7 +272,7 @@ async function startServer() {
         if (data && data.version) return String(data.version).trim();
       }
     } catch (e) {}
-    return "1.1.8";
+    return "1.2.0";
   }
 
   // API de Saúde e Versão (Usada pelo Auto-Updater do PWA)

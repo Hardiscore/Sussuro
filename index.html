@@ -56,14 +56,9 @@
   <!-- Custom Titlebar exclusiva para Electron Desktop (oculta no Web/PWA/Celular) -->
   <header id="custom-titlebar">
     <div class="titlebar-brand">
-      <!-- Ícone D20 / Headset -->
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 2l8 4.5v9L12 22l-8-6.5v-9L12 2z"/>
-        <path d="M12 22V12"/>
-        <path d="M20 6.5l-8 5.5-8-5.5"/>
-      </svg>
+      <!-- Ícone do app -->
+      <img src="icon.ico" width="18" height="18" alt="" draggable="false" loading="lazy" />
       <span>Sussurro</span>
-      <span class="titlebar-status-badge" id="titlebar-status">Electron Desktop</span>
     </div>
 
     <div class="titlebar-right-actions" style="display: flex; align-items: center; gap: 8px; -webkit-app-region: no-drag;">
@@ -128,7 +123,7 @@
             <div class="pwa-install-banner-info">
               <div class="pwa-install-icon">📲</div>
               <div>
-                <div class="pwa-install-title">Instalar Sussurro RPG como App (v1.1.8)</div>
+                <div class="pwa-install-title">Instalar Sussurro RPG como App (v1.2.0)</div>
                 <div class="pwa-install-sub">Roda em tela cheia, atualiza sozinho e mantém sua voz ativa em 2º plano. Se o Android exibir aviso do Play Protect, toque em <strong>"Instalar assim mesmo"</strong>.</div>
               </div>
             </div>
@@ -374,7 +369,7 @@
           <div class="layout-selector-wrapper" style="position: relative;">
             <button class="btn btn-secondary" id="btn-toggle-layout-menu" style="padding: 6px 12px; font-size: 13px;" data-tooltip="Modo de exibição (atalho: L)" type="button">
               <span id="layout-active-icon">🔀</span>
-              <span id="layout-active-label">Grid</span>
+              <span id="layout-active-label">Adaptável</span>
               <span style="font-size: 10px; margin-left: 4px; color: var(--text-muted);">▾</span>
             </button>
             <div id="layout-dropdown-menu" class="layout-dropdown hidden">
@@ -382,7 +377,7 @@
               <button class="layout-dropdown-item active" data-layout="movel" type="button">
                 <span class="layout-item-icon">🔀</span>
                 <div class="layout-item-details">
-                  <span class="layout-item-title">Grid Móvel (Padrão)</span>
+                  <span class="layout-item-title">Grid Adaptável (Padrão)</span>
                   <span class="layout-item-sub">Telas se acomodam para dividir igualmente</span>
                 </div>
               </button>
@@ -409,6 +404,8 @@
             <button class="btn-slot-adjust" id="btn-dec-slots" title="Diminuir vagas no grid fixo" type="button" style="background: none; border: none; color: var(--text-normal); cursor: pointer; font-size: 14px; font-weight: bold; padding: 2px 5px; border-radius: 3px;">−</button>
             <span id="label-fixed-slots" style="font-size: 12px; font-weight: 800; color: var(--text-bright); min-width: 18px; text-align: center;">5</span>
             <button class="btn-slot-adjust" id="btn-inc-slots" title="Aumentar vagas no grid fixo" type="button" style="background: none; border: none; color: var(--text-normal); cursor: pointer; font-size: 14px; font-weight: bold; padding: 2px 5px; border-radius: 3px;">+</button>
+            <!-- Trava por nome: cada pessoa mantém sua posição; quem sai deixa a vaga reservada -->
+            <button class="btn-slot-adjust" id="btn-toggle-fixed-lock" aria-pressed="false" title="Travar posições por nome: quem sair deixa a vaga reservada e volta no mesmo lugar. Desligar e ligar de novo reseta as posições." type="button" style="background: none; border: none; border-left: 1px solid var(--border-subtle); margin-left: 4px; color: var(--text-muted); cursor: pointer; font-size: 11px; font-weight: 700; padding: 2px 4px 2px 8px; white-space: nowrap;">🔓 Travar: Off</button>
           </div>
 
           <!-- Botão Exclusivo do Mestre para Silenciar Todos os Jogadores -->
@@ -694,7 +691,7 @@
                 <div style="font-weight: 700; font-size: 13.5px; color: #ffffff;" id="general-platform-name">Sussurro RPG</div>
                 <div style="font-size: 11.5px; color: var(--text-muted); margin-top: 2px;" id="general-platform-status">Modo Nativo Desktop com Bandeja</div>
               </div>
-              <span class="update-ready-tag" style="background: rgba(88, 101, 242, 0.15); color: #818cf8; border-color: rgba(88, 101, 242, 0.4); font-size: 12px; padding: 4px 10px; border-radius: 6px;">v1.1.8</span>
+              <span class="update-ready-tag" style="background: rgba(88, 101, 242, 0.15); color: #818cf8; border-color: rgba(88, 101, 242, 0.4); font-size: 12px; padding: 4px 10px; border-radius: 6px;">v1.2.0</span>
             </div>
           </div>
         </div>
@@ -824,13 +821,13 @@
 
           <div class="layout-selection-cards" style="display: flex; flex-direction: column; gap: 14px; margin-top: 16px;">
             
-            <!-- Modo 1: Grid Móvel -->
+            <!-- Modo 1: Grid Adaptável -->
             <label class="layout-card-option active" id="card-layout-movel" style="cursor: pointer;">
               <input type="radio" name="settings-grid-layout" value="movel" checked style="accent-color: var(--accent-blurple);" />
               <div class="layout-card-icon">🔀</div>
               <div class="layout-card-info">
                 <div class="layout-card-title">
-                  <span>Grid Móvel (Padrão Atual)</span>
+                  <span>Grid Adaptável (Padrão Atual)</span>
                   <span class="tag-free">Dinâmico</span>
                 </div>
                 <div class="layout-card-desc">
@@ -1258,10 +1255,10 @@
                 <div>
                   <div style="font-weight: 700; font-size: 16px; color: var(--text-normal); display: flex; align-items: center; gap: 8px;">
                     <span>Sussurro RPG</span>
-                    <span id="version-pill-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple); font-size: 11px;">v1.1.8</span>
+                    <span id="version-pill-badge" class="tag-free" style="background: rgba(88, 101, 242, 0.2); color: var(--accent-blurple); font-size: 11px;">v1.2.0</span>
                   </div>
                   <div style="font-size: 13px; color: var(--text-muted); margin-top: 2px;" id="version-current-text">
-                    Versão atual: <strong>v1.1.8</strong>
+                    Versão atual: <strong>v1.2.0</strong>
                   </div>
                 </div>
               </div>
@@ -1488,7 +1485,7 @@
       <div class="update-ready-content">
         <div class="update-ready-header">
           <h2 class="update-ready-title">Atualização Pronta</h2>
-          <span id="update-modal-version-tag" class="update-ready-tag">v1.1.8</span>
+          <span id="update-modal-version-tag" class="update-ready-tag">v1.2.0</span>
         </div>
 
         <p class="update-ready-desc">
@@ -1542,7 +1539,7 @@
       <div class="update-ready-content">
         <div class="update-ready-header">
           <h2 class="update-ready-title">Instalar Sussurro RPG</h2>
-          <span class="update-ready-tag" style="border-color: rgba(34, 197, 94, 0.45); color: #4ade80; background: rgba(34, 197, 94, 0.15);">v1.1.8</span>
+          <span class="update-ready-tag" style="border-color: rgba(34, 197, 94, 0.45); color: #4ade80; background: rgba(34, 197, 94, 0.15);">v1.2.0</span>
         </div>
 
         <p class="update-ready-desc">

@@ -37,9 +37,6 @@ jobs:
       - name: Instalar Dependências
         run: npm install
 
-      - name: Compilar Frontend e Servidor
-        run: npm run build
-
       - name: Empacotar e Publicar no GitHub Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

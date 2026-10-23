@@ -40,6 +40,7 @@ const STORAGE_KEYS = {
   NOISE_GATE_THRESHOLD: 'tavern_noise_gate_threshold',
   LAYOUT_MODE: 'tavern_layout_mode',
   FIXED_GRID_SLOTS: 'tavern_fixed_grid_slots',
+  FIXED_GRID_LOCK: 'tavern_fixed_grid_lock',
   SOUND_FEEDBACK: 'tavern_sound_feedback',
   SAVED_ROOMS: 'tavern_saved_rooms',
   // Filtros, Cenários e Avatar Reativo (PNGTuber)
@@ -238,6 +239,7 @@ const StorageService = {
       noiseGateThreshold: parseInt(this.get(STORAGE_KEYS.NOISE_GATE_THRESHOLD, '14'), 10) || 14,
       layoutMode: this.get(STORAGE_KEYS.LAYOUT_MODE, 'movel'),
       fixedGridSlots: Math.max(1, Math.min(15, parseInt(this.get(STORAGE_KEYS.FIXED_GRID_SLOTS, '5'), 10) || 5)),
+      fixedGridLock: this.get(STORAGE_KEYS.FIXED_GRID_LOCK, 'false') === 'true',
       soundFeedback: this.get(STORAGE_KEYS.SOUND_FEEDBACK, 'true') !== 'false',
       // Preferências de Filtros e Avatar
       customAvatar: this.get(STORAGE_KEYS.CUSTOM_AVATAR, null),
@@ -306,6 +308,10 @@ const StorageService = {
     return this.set(STORAGE_KEYS.FIXED_GRID_SLOTS, slots);
   },
 
+  saveFixedGridLock(enabled) {
+    return this.set(STORAGE_KEYS.FIXED_GRID_LOCK, enabled);
+  },
+
   getSavedRooms() {
     try {
       const data = safeStorage.getItem(STORAGE_KEYS.SAVED_ROOMS);
@@ -352,7 +358,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.1.8';
+export const APP_VERSION = '1.2.0';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -381,6 +387,10 @@ const state = {
   // Layouts de tela
   currentLayout: savedPrefs.layoutMode,
   fixedGridSlots: savedPrefs.fixedGridSlots,
+  // Trava por nome do Grid Fixo: fixedLockSlots[posição] = nome gravado naquela vaga
+  fixedGridLock: savedPrefs.fixedGridLock,
+  fixedLockSlots: [],
+  fixedLockRoom: null,
   activeSpeakerId: 'local',
   // Volumes individuais de participantes remotos (0 a 200)
   peerVolumes: {},
@@ -809,13 +819,11 @@ async function initApp() {
 function setupElectronTitlebar() {
   const isElectron = !!(window.electronAPI && window.electronAPI.isElectron);
   const titlebar = document.getElementById('custom-titlebar');
-  const statusBadge = document.getElementById('titlebar-status');
   const windowControls = document.getElementById('window-controls');
 
   if (isElectron) {
     document.documentElement.classList.add('is-electron');
     if (titlebar) titlebar.classList.remove('hidden');
-    if (statusBadge) statusBadge.textContent = 'Electron Desktop';
     const btnMin = document.getElementById('btn-window-minimize');
     const btnMax = document.getElementById('btn-window-maximize');
     const btnClose = document.getElementById('btn-window-close');
@@ -1518,6 +1526,12 @@ async function enumerateDevices() {
 // INÍCIO E GERENCIAMENTO DA CHAMADA
 // ============================================================================
 async function startCall(roomId) {
+  // Posições travadas por nome valem só para a mesma sala
+  if (state.fixedLockRoom !== roomId) {
+    state.fixedLockRoom = roomId;
+    state.fixedLockSlots = [];
+  }
+
   // Encerra pipeline e stream prévia do lobby para liberar o hardware e modelos
   videoEffects.stopPipeline('lobby');
   if (lobbyStream) {
@@ -2566,7 +2580,10 @@ function updateParticipantCount() {
   // - Nos outros modos: acomoda os tiles reais existentes
   let totalForLayout = realTiles;
   if (state.currentLayout === 'fixo') {
-    totalForLayout = Math.max(realTiles, state.fixedGridSlots);
+    // Com a trava por nome, as vagas reservadas também ocupam espaço no grid
+    totalForLayout = state.fixedGridLock
+      ? Math.max(realTiles, state.fixedGridSlots, grid.querySelectorAll('.video-tile').length)
+      : Math.max(realTiles, state.fixedGridSlots);
   }
 
   const screenTiles = grid.querySelectorAll('.video-tile.screen-share, .video-tile.is-screen-sharing');
@@ -2698,7 +2715,7 @@ function applyGridLayout(layoutMode, notifyUser = false) {
   const iconSpan = document.getElementById('layout-active-icon') || document.getElementById('current-layout-icon');
   const textSpan = document.getElementById('layout-active-label') || document.getElementById('current-layout-text');
   const layoutLabels = {
-    movel: { icon: '🔀', text: 'Grid' },
+    movel: { icon: '🔀', text: 'Adaptável' },
     fixo: { icon: '🏛️', text: 'Fixo' },
     destaque: { icon: '⭐', text: 'Destaque' }
   };
@@ -2727,26 +2744,24 @@ function applyGridLayout(layoutMode, notifyUser = false) {
     }
   });
 
+  // Limpa a ordem visual aplicada pela trava por nome (só o modo Fixo travado usa)
+  grid.querySelectorAll('.video-tile').forEach(t => { t.style.order = ''; });
+
   // Lógica específica de cada modo:
   if (layoutMode === 'fixo') {
     // Modo Fixo: remove slots vazios anteriores e recria até completar state.fixedGridSlots vagas
     grid.querySelectorAll('.empty-slot').forEach(el => el.remove());
     grid.querySelectorAll('.video-tile').forEach(t => t.classList.remove('featured-speaker'));
 
-    const realTiles = grid.querySelectorAll('.video-tile:not(.empty-slot)').length;
-    const slotsNeeded = Math.max(0, state.fixedGridSlots - realTiles);
+    if (state.fixedGridLock) {
+      applyFixedGridLock(grid);
+    } else {
+      const realTiles = grid.querySelectorAll('.video-tile:not(.empty-slot)').length;
+      const slotsNeeded = Math.max(0, state.fixedGridSlots - realTiles);
 
-    for (let i = 0; i < slotsNeeded; i++) {
-      const emptySlot = document.createElement('div');
-      emptySlot.className = 'video-tile empty-slot';
-      emptySlot.innerHTML = `
-        <div class="empty-slot-content">
-          <span>🛡️</span>
-          <span>Vaga de Aventureiro</span>
-          <span class="empty-slot-sub">Aguardando jogador...</span>
-        </div>
-      `;
-      grid.appendChild(emptySlot);
+      for (let i = 0; i < slotsNeeded; i++) {
+        grid.appendChild(createEmptyGridSlot());
+      }
     }
   } else if (layoutMode === 'destaque') {
     // Modo Destaque: remove slots vazios e atribui destaque a quem está falando
@@ -2769,10 +2784,95 @@ function applyGridLayout(layoutMode, notifyUser = false) {
   const inputSlots = document.getElementById('input-fixed-grid-slots');
   if (inputSlots) inputSlots.value = state.fixedGridSlots;
 
+  updateFixedGridLockButton();
   updateParticipantCount();
 
   if (notifyUser) {
     showLayoutNotification(`Modo de exibição alterado para ${layoutLabels[layoutMode].text}`);
+  }
+}
+
+function createEmptyGridSlot(reservedName = null) {
+  const emptySlot = document.createElement('div');
+  emptySlot.className = 'video-tile empty-slot';
+  emptySlot.innerHTML = reservedName ? `
+    <div class="empty-slot-content">
+      <span>🔒</span>
+      <span>Vaga de ${escapeHtml(reservedName)}</span>
+      <span class="empty-slot-sub">Aguardando retorno...</span>
+    </div>
+  ` : `
+    <div class="empty-slot-content">
+      <span>🛡️</span>
+      <span>Vaga de Aventureiro</span>
+      <span class="empty-slot-sub">Aguardando jogador...</span>
+    </div>
+  `;
+  return emptySlot;
+}
+
+/**
+ * Grid Fixo com trava por nome: cada nome fica gravado na posição em que entrou.
+ * Quem sai deixa a vaga reservada (vazia) e, ao voltar, ocupa o mesmo lugar.
+ * A posição é aplicada com a propriedade CSS "order", sem mover os vídeos no DOM.
+ */
+function applyFixedGridLock(grid) {
+  const slots = state.fixedLockSlots;
+  const tileBySlot = new Map();
+
+  grid.querySelectorAll('.video-tile:not(.empty-slot):not(.screen-share)').forEach(tile => {
+    const name = tile.id === 'tile-local'
+      ? state.userName
+      : (tile.querySelector('.participant-name')?.textContent || tile.id);
+    // Nomes repetidos ocupam vagas diferentes
+    let idx = slots.findIndex((n, i) => n === name && !tileBySlot.has(i));
+    if (idx === -1) {
+      slots.push(name);
+      idx = slots.length - 1;
+    }
+    tileBySlot.set(idx, tile);
+  });
+
+  const total = Math.max(slots.length, state.fixedGridSlots);
+  for (let i = 0; i < total; i++) {
+    const tile = tileBySlot.get(i);
+    if (tile) {
+      tile.style.order = i;
+    } else {
+      const emptySlot = createEmptyGridSlot(slots[i] || null);
+      emptySlot.style.order = i;
+      grid.appendChild(emptySlot);
+    }
+  }
+
+  // Transmissões de tela ficam depois das vagas da mesa
+  grid.querySelectorAll('.video-tile.screen-share').forEach(t => { t.style.order = total; });
+}
+
+function updateFixedGridLockButton() {
+  const btn = document.getElementById('btn-toggle-fixed-lock');
+  if (!btn) return;
+  btn.textContent = state.fixedGridLock ? '🔒 Travar: On' : '🔓 Travar: Off';
+  btn.style.color = state.fixedGridLock ? 'var(--accent-green)' : 'var(--text-muted)';
+  btn.setAttribute('aria-pressed', state.fixedGridLock ? 'true' : 'false');
+}
+
+/**
+ * Liga/desliga a trava por nome. Ligar ou desligar sempre reseta os nomes gravados.
+ */
+function setFixedGridLock(enabled, notify = true) {
+  state.fixedGridLock = !!enabled;
+  state.fixedLockSlots = [];
+  StorageService.saveFixedGridLock(state.fixedGridLock);
+  updateFixedGridLockButton();
+
+  if (state.currentLayout === 'fixo') {
+    applyGridLayout('fixo', false);
+  }
+  if (notify) {
+    showLayoutNotification(state.fixedGridLock
+      ? '🔒 Posições travadas por nome'
+      : '🔓 Trava por nome desligada');
   }
 }
 
@@ -3729,6 +3829,13 @@ function setupLayoutSelector() {
     btnIncSlots.onclick = (e) => {
       e.stopPropagation();
       setFixedGridSlots(state.fixedGridSlots + 1, true);
+    };
+  }
+  const btnToggleFixedLock = document.getElementById('btn-toggle-fixed-lock');
+  if (btnToggleFixedLock) {
+    btnToggleFixedLock.onclick = (e) => {
+      e.stopPropagation();
+      setFixedGridLock(!state.fixedGridLock, true);
     };
   }
 }

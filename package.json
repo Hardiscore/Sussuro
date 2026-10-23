@@ -1,7 +1,7 @@
 {
   "name": "sussurro-rpg",
   "private": true,
-  "version": "1.1.8",
+  "version": "1.2.0",
   "description": "Sussurro - Aplicativo de chamadas de voz e vídeo em grupo",
   "author": "Hardiscore",
   "repository": {
@@ -14,7 +14,7 @@
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
-    "start": "node dist/server.cjs",
+    "start": "node server.ts",
     "preview": "vite preview",
     "electron": "electron .",
     "electron:dev": "electron .",
@@ -74,7 +74,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
@@ -122,5 +124,14 @@
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "vite-plugin-pwa": "^2.0.0"
+  },
+  "allowScripts": {
+    "@firebase/util@1.15.3": true,
+    "@google/genai@2.23.0": true,
+    "electron@33.4.11": true,
+    "electron-winstaller@5.4.0": true,
+    "esbuild@0.28.2": true,
+    "protobufjs@7.6.6": true,
+    "uiohook-napi@1.5.5": true
   }
 }
