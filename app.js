@@ -7,6 +7,7 @@
 
 import { RoomChat } from './chat.js';
 import { LobbyChat } from './lobby-chat.js';
+import { ObserverChat } from './observer-chat.js';
 import { TavernWebRTC, getSavedIceServers, saveIceServers, DEFAULT_ICE_SERVERS } from './webrtc.js';
 import { getStoredFirebaseConfig, saveFirebaseConfig, resetFirebaseConfig, BUILTIN_FIREBASE_CONFIG } from './firebase-config.js';
 // Importação resiliente de efeitos de vídeo (se o módulo falhar ou faltar, não derruba o app)
@@ -358,7 +359,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.2.1';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -376,6 +377,9 @@ const state = {
   isAudioMuted: false,
   isVideoOff: false,
   isInCall: false,
+  // Modo observador: assiste/ouve sem aparecer no grid nem falar com os jogadores
+  isObserver: false,
+  currentRoomId: null,
   // Atalhos de voz e microfone
   micActivationMode: savedPrefs.micMode,
   micHotkey: savedPrefs.micHotkey.toLowerCase(),
@@ -664,6 +668,7 @@ function generateRpgRoomName() {
 // INICIALIZAÇÃO DA INTERFACE (Isolamento de Falhas e Resiliência Total)
 // ============================================================================
 const roomChat = new RoomChat(() => state.webrtc);
+const observerChat = new ObserverChat(() => state.webrtc);
 const lobbyChat = new LobbyChat({
   getName: () => (document.getElementById('input-user-name')?.value || state.userName || 'Aventureiro').trim().slice(0, 32),
   isInCall: () => !!state.isInCall,
@@ -765,6 +770,7 @@ async function initApp() {
     { name: 'setupSettingsModal', fn: setupSettingsModal },
     { name: 'setupHayfaPcMode', fn: setupHayfaPcMode },
     { name: 'roomChat', fn: () => roomChat.build() },
+    { name: 'observerChat', fn: () => observerChat.build() },
     { name: 'lobbyChat', fn: () => { lobbyChat.init(); } },
     { name: 'setupDesktopSettings', fn: () => { setupDesktopSettings(); } },
     { name: 'setupScreenShareModal', fn: setupScreenShareModal },
@@ -972,6 +978,19 @@ function setupLobbyInputs() {
     startCall(roomId);
   });
 
+  const btnJoinObserver = document.getElementById('btn-join-observer');
+  if (btnJoinObserver) {
+    btnJoinObserver.addEventListener('click', () => {
+      const roomId = roomInput.value.trim();
+      if (!roomId) {
+        alert('Por favor, informe um código ou ID para a sala.');
+        roomInput.focus();
+        return;
+      }
+      startCall(roomId, { observer: true });
+    });
+  }
+
   roomInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') {
       e.preventDefault();
@@ -1038,8 +1057,11 @@ async function fetchActiveRoomsFromFirebase() {
               const peersData = await pRes.json();
               if (peersData && typeof peersData === 'object') {
                 const peerIds = Object.keys(peersData);
-                if (peerIds.length > 0) {
-                  const peerList = peerIds.map(pid => {
+                // Observadores não contam como pessoas na mesa; sala só com observadores não aparece
+                const observerCount = peerIds.filter(pid => peersData[pid]?.observer).length;
+                const playerIds = peerIds.filter(pid => !peersData[pid]?.observer);
+                if (playerIds.length > 0) {
+                  const peerList = playerIds.map(pid => {
                     const p = peersData[pid];
                     return {
                       id: pid,
@@ -1053,6 +1075,7 @@ async function fetchActiveRoomsFromFirebase() {
                     id: roomId,
                     name: roomId.replace(/[-_]/g, ' ').replace(/\b\w/g, l => l.toUpperCase()),
                     peerCount: peerList.length,
+                    observerCount,
                     peers: peerList,
                     latestActivity: Math.max(...peerList.map(p => p.joinedAt || 0), Date.now())
                   };
@@ -1185,7 +1208,7 @@ function renderLobbyRooms() {
     const roomId = room.id;
     const roomName = room.name || roomId;
     const count = room.peerCount || 1;
-    const countText = count === 1 ? '1 online' : `${count} online`;
+    const countText = (count === 1 ? '1 online' : `${count} online`) + (room.observerCount ? ` · 👁 ${room.observerCount}` : '');
     const memberNames = (room.peers || []).map(p => p.name).slice(0, 3).join(', ');
 
     return `
@@ -1205,6 +1228,9 @@ function renderLobbyRooms() {
           </div>
         </div>
         <div class="lobby-room-actions">
+          <button type="button" class="btn-join-saved-room btn-observe-saved-room" title="Entrar como observador (só assistir e ouvir)">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
           <button type="button" class="btn-join-saved-room" title="Entrar nesta sala imediatamente">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
             <span>Entrar</span>
@@ -1217,7 +1243,15 @@ function renderLobbyRooms() {
   // Associa cliques aos botões das salas renderizadas
   container.querySelectorAll('.lobby-room-card').forEach(card => {
     const roomId = card.getAttribute('data-room-id');
-    const joinBtn = card.querySelector('.btn-join-saved-room');
+    const joinBtn = card.querySelector('.btn-join-saved-room:not(.btn-observe-saved-room)');
+    const observeBtn = card.querySelector('.btn-observe-saved-room');
+    if (observeBtn) {
+      observeBtn.onclick = (e) => {
+        e.stopPropagation();
+        if (roomInput) roomInput.value = roomId;
+        startCall(roomId, { observer: true });
+      };
+    }
 
     if (joinBtn) {
       joinBtn.onclick = (e) => {
@@ -1525,7 +1559,11 @@ async function enumerateDevices() {
 // ============================================================================
 // INÍCIO E GERENCIAMENTO DA CHAMADA
 // ============================================================================
-async function startCall(roomId) {
+async function startCall(roomId, options = {}) {
+  state.isObserver = !!options.observer;
+  state.currentRoomId = roomId;
+  applyObserverModeUi();
+
   // Posições travadas por nome valem só para a mesma sala
   if (state.fixedLockRoom !== roomId) {
     state.fixedLockRoom = roomId;
@@ -1579,6 +1617,7 @@ async function startCall(roomId) {
     noiseSuppressionMode: state.noiseSuppressionMode,
     noiseGateThreshold: state.noiseGateThreshold,
     hayfaPcMode: !!state.hayfaPcMode,
+    observer: state.isObserver,
 
     onNoAudioWarning: (warningMsg) => {
       showNoAudioWarning(warningMsg);
@@ -1627,9 +1666,30 @@ async function startCall(roomId) {
       updateParticipantCount();
     },
 
-    onFirebaseRoomReady: (db, roomId) => roomChat.attach(db, roomId),
+    onFirebaseRoomReady: (db, roomId) => {
+      roomChat.attach(db, roomId);
+      if (state.isObserver) observerChat.attach(db, roomId);
+    },
 
-    onPeerStreamRemoved: (peerId) => {
+    onObserverVoiceAdded: (peerId, peerInfo, stream) => {
+      attachObserverAudio(peerId, stream);
+    },
+
+    onObserversChanged: (observers) => {
+      updateObserverPresence(observers);
+    },
+
+    onObserverCapacityExceeded: () => {
+      leaveCall();
+      showLayoutNotification('👁 A mesa lotou (15 pessoas): sua vaga de observador foi liberada para um jogador.');
+    },
+
+    onPeerStreamRemoved: (peerId, peerInfo) => {
+      // Observador saindo: sem som, sem aviso e sem tile para remover
+      if (peerInfo && peerInfo.observer) {
+        detachObserverAudio(peerId);
+        return;
+      }
       try { roomChat.peerLeft(peerId); } catch (e) {}
       if (screenViewers.delete(peerId)) updateScreenViewerBadge();
       removePeerTile(peerId);
@@ -1638,6 +1698,7 @@ async function startCall(roomId) {
     },
 
     onPeerInfoUpdated: (peerId, peerInfo) => {
+      if (peerInfo?.observer || state.webrtc?.peers.get(peerId)?.peerInfo?.observer) return;
       updatePeerMetadata(peerId, peerInfo);
     },
 
@@ -1661,6 +1722,9 @@ async function startCall(roomId) {
     },
 
     onSpeakingState: (targetId, isSpeaking, volume) => {
+      if (state.isObserver) {
+        observerChat.setSpeaking(targetId === 'local' ? state.webrtc?.myPeerId : targetId, isSpeaking);
+      }
       if (targetId === 'local') {
         const localTile = document.getElementById('tile-local');
         if (localTile) {
@@ -1708,6 +1772,8 @@ async function startCall(roomId) {
         updateDiceButtonsBlockedState();
         displayDiceToast(data.blocked ? `🎲 ${escapeHtml(data.gmName || 'O Mestre')} desabilitou a rolagem de dados para todos.` : `🎲 ${escapeHtml(data.gmName || 'O Mestre')} liberou a rolagem de dados!`);
       }
+      // Comandos do Mestre não valem para observadores (o microfone deles é só entre observadores)
+      if (state.isObserver && (data.type === 'gm-mute-player' || data.type === 'gm-unmute-player')) return;
       if (data.type === 'gm-mute-player') {
         if (data.targetId === 'all' || (state.webrtc && data.targetId === state.webrtc.myPeerId)) {
           handleGmMuteReceived(data.gmName || 'Mestre');
@@ -1756,6 +1822,12 @@ async function startCall(roomId) {
       appVersion: APP_VERSION
     });
 
+    if (state.isObserver) {
+      updateObserverPresence([]);
+      observerChat.selectTab('obs'); // observador abre o chat já na aba dele
+      showLayoutNotification('👁 Você está observando: os jogadores não te veem nem te ouvem.');
+    }
+
     // Ativa proteção de primeiro plano (Wake Lock) e segundo plano (Media Session + Audio Keep-Alive)
     acquireWakeLock();
     startBackgroundAudioKeepAlive(roomId);
@@ -1783,8 +1855,15 @@ async function startCall(roomId) {
   }
 }
 
-function leaveCall() {
+function leaveCall(options = {}) {
+  const toLobby = options.toLobby !== false;
+  if (toLobby) clearTimeout(modeSwitchTimer); // cancela uma troca de modo pendente
   try { roomChat.reset(); } catch (e) {}
+  try { observerChat.reset(); } catch (e) {}
+  document.querySelectorAll('.observer-voice-audio').forEach(a => { a.srcObject = null; a.remove(); });
+  state.isObserver = false;
+  applyObserverModeUi();
+  updateObserverPresence([]);
   videoEffects.stopPipeline('local');
   const localVideo = document.getElementById('local-video');
   if (localVideo) {
@@ -1826,6 +1905,9 @@ function leaveCall() {
   tiles.forEach(t => t.remove());
   grid.setAttribute('data-count', '1');
 
+  // Troca de modo (observador <-> participante): reconecta sem passar pelo lobby
+  if (!toLobby) return;
+
   // Volta para a tela de Lobby
   document.getElementById('no-audio-warning-banner')?.classList.add('hidden');
   document.getElementById('call-screen').classList.add('hidden');
@@ -1836,6 +1918,66 @@ function leaveCall() {
   }
   fetchActiveRoomsFromFirebase();
   initLobbyPreview();
+}
+
+// ============================================================================
+// MODO OBSERVADOR
+// ============================================================================
+function applyObserverModeUi() {
+  document.documentElement.classList.toggle('observer-mode', !!state.isObserver);
+  document.getElementById('tile-local')?.classList.toggle('observer-hidden', !!state.isObserver);
+}
+
+/**
+ * Atualiza o aviso "👁 N" no topo da chamada e, para observadores, a lista do chat dos observadores.
+ */
+function updateObserverPresence(observers) {
+  const badge = document.getElementById('call-observer-count');
+  const total = observers.length + (state.isObserver ? 1 : 0);
+  if (badge) {
+    badge.textContent = state.isObserver ? `👁 Observando · ${total}` : `👁 ${total}`;
+    badge.classList.toggle('hidden', total === 0 || !state.isInCall);
+  }
+  if (state.isObserver && state.webrtc) {
+    observerChat.setPeople([{ peerId: state.webrtc.myPeerId, name: `${state.userName} (Você)` }, ...observers]);
+  }
+}
+
+// Voz entre observadores: só áudio, sem tile no grid
+function attachObserverAudio(peerId, stream) {
+  let audio = document.getElementById(`observer-audio-${peerId}`);
+  if (!audio) {
+    audio = document.createElement('audio');
+    audio.id = `observer-audio-${peerId}`;
+    audio.className = 'observer-voice-audio';
+    audio.autoplay = true;
+    audio.setAttribute('playsinline', '');
+    document.body.appendChild(audio);
+  }
+  if (audio.srcObject !== stream) audio.srcObject = stream;
+  audio.play().catch(() => {});
+}
+
+function detachObserverAudio(peerId) {
+  const audio = document.getElementById(`observer-audio-${peerId}`);
+  if (audio) {
+    audio.srcObject = null;
+    audio.remove();
+  }
+}
+
+/**
+ * Troca entre observador e participante na mesma sala (reconecta em alguns segundos).
+ */
+let modeSwitchTimer = null;
+function switchCallMode(toObserver) {
+  const roomId = state.currentRoomId;
+  if (!roomId || !state.isInCall) return;
+  leaveCall({ toLobby: false });
+  showLayoutNotification(toObserver ? '👁 Entrando como observador...' : '🎲 Entrando na chamada...');
+  // Espera a saída terminar no Firebase (se estava sozinho, a sala vazia é apagada) antes de reentrar
+  clearTimeout(modeSwitchTimer);
+  modeSwitchTimer = setTimeout(() => startCall(roomId, { observer: toObserver }), 1500);
 }
 
 // ============================================================================
@@ -2569,7 +2711,7 @@ function updateParticipantCount() {
   const grid = document.getElementById('video-grid');
   if (!grid) return;
 
-  const realTiles = grid.querySelectorAll('.video-tile:not(.empty-slot)').length;
+  const realTiles = grid.querySelectorAll('.video-tile:not(.empty-slot):not(.observer-hidden)').length;
   const countEl = document.getElementById('call-participant-count');
   if (countEl) {
     countEl.textContent = `${realTiles}/${MAX_PARTICIPANTS}`;
@@ -2582,7 +2724,7 @@ function updateParticipantCount() {
   if (state.currentLayout === 'fixo') {
     // Com a trava por nome, as vagas reservadas também ocupam espaço no grid
     totalForLayout = state.fixedGridLock
-      ? Math.max(realTiles, state.fixedGridSlots, grid.querySelectorAll('.video-tile').length)
+      ? Math.max(realTiles, state.fixedGridSlots, grid.querySelectorAll('.video-tile:not(.observer-hidden)').length)
       : Math.max(realTiles, state.fixedGridSlots);
   }
 
@@ -2756,7 +2898,7 @@ function applyGridLayout(layoutMode, notifyUser = false) {
     if (state.fixedGridLock) {
       applyFixedGridLock(grid);
     } else {
-      const realTiles = grid.querySelectorAll('.video-tile:not(.empty-slot)').length;
+      const realTiles = grid.querySelectorAll('.video-tile:not(.empty-slot):not(.observer-hidden)').length;
       const slotsNeeded = Math.max(0, state.fixedGridSlots - realTiles);
 
       for (let i = 0; i < slotsNeeded; i++) {
@@ -2820,7 +2962,7 @@ function applyFixedGridLock(grid) {
   const slots = state.fixedLockSlots;
   const tileBySlot = new Map();
 
-  grid.querySelectorAll('.video-tile:not(.empty-slot):not(.screen-share)').forEach(tile => {
+  grid.querySelectorAll('.video-tile:not(.empty-slot):not(.screen-share):not(.observer-hidden)').forEach(tile => {
     const name = tile.id === 'tile-local'
       ? state.userName
       : (tile.querySelector('.participant-name')?.textContent || tile.id);
@@ -3849,6 +3991,10 @@ function setupCallControls() {
   const btnShareScreen = document.getElementById('btn-share-screen');
   const btnLeaveCall = document.getElementById('btn-leave-call');
   const btnCopyRoomId = document.getElementById('btn-copy-room-id');
+
+  // Modo observador: virar observador (jogador) / participar da chamada (observador)
+  document.getElementById('btn-become-observer')?.addEventListener('click', () => switchCallMode(true));
+  document.getElementById('btn-observer-join-main')?.addEventListener('click', () => switchCallMode(false));
 
   // Mutar / Desmutar Microfone
   btnToggleMic.addEventListener('click', () => {
@@ -5899,6 +6045,11 @@ async function confirmScreenShare() {
 // E PUSH-TO-TALK TOUCH PARA CELULAR
 // ============================================================================
 let deferredPwaPrompt = null;
+// Captura o convite de instalação desde o início (a tela de boas-vindas usa antes do app iniciar)
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPwaPrompt = e;
+});
 let screenWakeLock = null;
 let silentKeepAliveUrl = null;
 let bgKeepAliveInterval = null;
@@ -6378,9 +6529,45 @@ function updateMobilePttVisibility() {
 // ============================================================================
 // PONTO DE ENTRADA DO APLICATIVO
 // ============================================================================
+// No navegador comum, a tela de boas-vindas aparece primeiro e o app só é iniciado
+// quando a pessoa escolhe usar a versão web (assim não pede microfone/câmera à toa).
+function setupWelcomeScreen() {
+  if (!document.documentElement.classList.contains('show-welcome')) {
+    initApp();
+    return;
+  }
+
+  const enterWebApp = () => {
+    document.documentElement.classList.remove('show-welcome');
+    initApp();
+  };
+
+  const btnOpenWeb = document.getElementById('btn-welcome-open-web');
+  if (btnOpenWeb) btnOpenWeb.onclick = enterWebApp;
+
+  const btnInstall = document.getElementById('btn-welcome-install');
+  if (btnInstall) {
+    btnInstall.onclick = async () => {
+      if (deferredPwaPrompt) {
+        try {
+          await deferredPwaPrompt.prompt();
+          const choice = await deferredPwaPrompt.userChoice;
+          if (choice && choice.outcome === 'accepted') deferredPwaPrompt = null;
+        } catch (err) {
+          console.warn('[PWA] Erro ao exibir prompt nativo:', err);
+        }
+        return;
+      }
+      // Sem prompt nativo (ex: iPhone/Safari): abre o app e mostra o guia de instalação
+      enterWebApp();
+      document.getElementById('pwa-install-guide-modal')?.classList.remove('hidden');
+    };
+  }
+}
+
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initApp);
+  document.addEventListener('DOMContentLoaded', setupWelcomeScreen);
 } else {
-  initApp();
+  setupWelcomeScreen();
 }
 

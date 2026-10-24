@@ -106,8 +106,14 @@ export class TavernWebRTC {
       audioMuted: false,
       videoOff: false,
       isScreenSharing: false,
-      hasScreenAudio: false
+      hasScreenAudio: false,
+      // Observador: só assiste/ouve os jogadores; fala apenas com outros observadores
+      observer: !!options.observer
     };
+    this.isObserver = !!options.observer;
+    // Todos os registros da sala no Firebase (inclui quem foi ignorado), usado no limite de 15 pessoas
+    this.roomRoster = new Map();
+    this.capacityCheckTimer = null;
 
     // Regulador adaptativo oculto de qualidade e desempenho
     this.adaptiveProfile = 'balanced'; // 'high', 'balanced', 'low'
@@ -180,6 +186,9 @@ export class TavernWebRTC {
     this.onFirebaseRoomReady = options.onFirebaseRoomReady || null;
     this.onVersionMismatch = options.onVersionMismatch || (() => {});
     this.onDiceBlockedStateChange = options.onDiceBlockedStateChange || (() => {});
+    this.onObserverVoiceAdded = options.onObserverVoiceAdded || (() => {});
+    this.onObserversChanged = options.onObserversChanged || (() => {});
+    this.onObserverCapacityExceeded = options.onObserverCapacityExceeded || (() => {});
   }
 
   /**
@@ -1412,10 +1421,14 @@ export class TavernWebRTC {
     // Se a sala está vazia, apaga chat antigo que possa ter sobrado (ex.: último participante caiu sem sair direito)
     try {
       const existing = await get(ref(this.firebaseDb, `rooms/${this.roomId}/peers`));
-      if (!existing.exists()) await remove(ref(this.firebaseDb, `rooms/${this.roomId}/chat`));
+      if (!existing.exists()) {
+        await remove(ref(this.firebaseDb, `rooms/${this.roomId}/chat`));
+        await remove(ref(this.firebaseDb, `rooms/${this.roomId}/observerChat`));
+      }
     } catch (e) {}
 
     // Registra presença local
+    this.userInfo.joinedAt = Date.now();
     await set(myPeerRef, {
       id: this.myPeerId,
       name: this.userInfo.name,
@@ -1423,7 +1436,8 @@ export class TavernWebRTC {
       audioMuted: this.userInfo.audioMuted,
       videoOff: this.userInfo.videoOff,
       appVersion: this.appVersion,
-      joinedAt: Date.now()
+      observer: !!this.userInfo.observer,
+      joinedAt: this.userInfo.joinedAt
     });
 
     // Remove do banco ao desconectar
@@ -1437,6 +1451,8 @@ export class TavernWebRTC {
     const unsubscribePeers = onChildAdded(peersRef, (snapshot) => {
       const peerData = snapshot.val();
       if (peerData && peerData.id !== this.myPeerId) {
+        this.roomRoster.set(peerData.id, peerData);
+        this.scheduleObserverCapacityCheck();
         this.handlePeerDiscovered(peerData.id, peerData);
       }
     });
@@ -1444,6 +1460,7 @@ export class TavernWebRTC {
     const unsubscribePeerChanged = onChildChanged(peersRef, (snapshot) => {
       const peerData = snapshot.val();
       if (peerData && peerData.id !== this.myPeerId) {
+        this.roomRoster.set(peerData.id, peerData);
         this.handlePeerMetaReceived(peerData.id, peerData);
       }
     });
@@ -1451,6 +1468,7 @@ export class TavernWebRTC {
     const unsubscribePeerRemoved = onChildRemoved(peersRef, (snapshot) => {
       const peerData = snapshot.val();
       if (peerData && peerData.id !== this.myPeerId) {
+        this.roomRoster.delete(peerData.id);
         this.closePeer(peerData.id);
       }
     });
@@ -1656,7 +1674,10 @@ export class TavernWebRTC {
    */
   async handlePeerDiscovered(peerId, peerInfo) {
     if (this.peers.has(peerId)) return;
-    if (this.peers.size >= 14) {
+    const peerIsObserver = !!(peerInfo && peerInfo.observer);
+    const playerPeers = [...this.peers.values()].filter(p => !p.peerInfo?.observer).length;
+    // Jogadores: até 15 na mesa. Observadores não tiram vaga de jogador (ver scheduleObserverCapacityCheck)
+    if ((!peerIsObserver && playerPeers >= (this.isObserver ? 15 : 14)) || this.peers.size >= 20) {
       console.warn(`[WebRTC] Limite da malha de 15 participantes atingido. Ignorando ${peerId}`);
       return;
     }
@@ -1682,6 +1703,7 @@ export class TavernWebRTC {
     const isPolite = this.myPeerId < peerId;
     const peerObj = this.createPeerConnection(peerId, peerInfo, isPolite);
     this.peers.set(peerId, peerObj);
+    if (peerIsObserver) this.notifyObserversChanged();
 
     // Se estivermos transmitindo tela quando o novo participante entrar:
     // Garante que as faixas de tela sejam adicionadas imediatamente à conexão deste novo peer
@@ -1747,9 +1769,12 @@ export class TavernWebRTC {
       ignoreOffer: false
     };
 
-    // Adiciona faixas locais de microfone e câmera à conexão
-    if (this.localStream) {
-      this.localStream.getTracks().forEach(track => {
+    // Adiciona faixas locais de microfone e câmera à conexão.
+    // Observador: nada vai para os jogadores; para outros observadores vai só a voz.
+    const peerIsObserver = !!(peerInfo && peerInfo.observer);
+    if (this.localStream && (!this.isObserver || peerIsObserver)) {
+      const tracks = this.isObserver ? this.localStream.getAudioTracks() : this.localStream.getTracks();
+      tracks.forEach(track => {
         pc.addTrack(track, this.localStream);
       });
     }
@@ -1822,6 +1847,17 @@ export class TavernWebRTC {
       console.log(`[WebRTC] Faixa remota recebida de ${peerId}:`, event.track.kind, event.streams);
       const track = event.track;
       let stream = event.streams && event.streams[0] ? event.streams[0] : null;
+
+      // Mídia vinda de observador: jogadores ignoram; observadores só recebem a voz (sem tile no grid)
+      if (peerData.peerInfo?.observer) {
+        if (!this.isObserver || track.kind !== 'audio') return;
+        if (!peerData.remoteStream.getTracks().includes(track)) peerData.remoteStream.addTrack(track);
+        this.setupRemoteAudioAnalyser(peerId, peerData.remoteStream);
+        track.onunmute = () => this.onObserverVoiceAdded(peerId, peerData.peerInfo, peerData.remoteStream);
+        track.onended = () => this.cleanupRemoteAudioAnalyser(peerId);
+        this.onObserverVoiceAdded(peerId, peerData.peerInfo, peerData.remoteStream);
+        return;
+      }
 
       if (track.kind === 'video') {
         const matchesScreenStream = (stream && peerData.screenStreamId && stream.id === peerData.screenStreamId);
@@ -2324,6 +2360,38 @@ export class TavernWebRTC {
   }
 
   /**
+   * Lista de observadores conectados (para o aviso "👁 N observando" e o painel dos observadores)
+   */
+  notifyObserversChanged() {
+    const observers = [...this.peers.values()]
+      .filter(p => p.peerInfo?.observer)
+      .map(p => ({ peerId: p.peerId, name: p.peerInfo.name || 'Observador' }));
+    this.onObserversChanged(observers);
+  }
+
+  /**
+   * Limite de 15 pessoas (jogadores + observadores): se passar, o observador que entrou
+   * por último libera a vaga. Cada observador checa só a si mesmo.
+   */
+  scheduleObserverCapacityCheck() {
+    if (!this.isObserver) return;
+    if (this.capacityCheckTimer) clearTimeout(this.capacityCheckTimer);
+    this.capacityCheckTimer = setTimeout(() => {
+      this.capacityCheckTimer = null;
+      const everyone = [...this.roomRoster.values(), { id: this.myPeerId, ...this.userInfo }];
+      const excess = everyone.length - 15;
+      if (excess <= 0) return;
+      const newestObservers = everyone
+        .filter(p => p.observer)
+        .sort((a, b) => (b.joinedAt || 0) - (a.joinedAt || 0) || String(b.id).localeCompare(String(a.id)))
+        .slice(0, excess);
+      if (newestObservers.some(p => p.id === this.myPeerId)) {
+        this.onObserverCapacityExceeded();
+      }
+    }, 1200);
+  }
+
+  /**
    * Encerra conexão com um peer específico
    */
   closePeer(peerId) {
@@ -2334,7 +2402,8 @@ export class TavernWebRTC {
         peerObj.connection.close();
       }
       this.peers.delete(peerId);
-      this.onPeerStreamRemoved(peerId);
+      this.onPeerStreamRemoved(peerId, peerObj.peerInfo);
+      if (peerObj.peerInfo?.observer) this.notifyObserversChanged();
       console.log(`[WebRTC] Peer removido: ${peerId}`);
     }
   }
@@ -2449,9 +2518,14 @@ export class TavernWebRTC {
     // Encerra todos os peers
     for (const [peerId, peer] of this.peers.entries()) {
       if (peer.connection) peer.connection.close();
-      this.onPeerStreamRemoved(peerId);
+      this.onPeerStreamRemoved(peerId, peer.peerInfo);
     }
     this.peers.clear();
+    this.roomRoster.clear();
+    if (this.capacityCheckTimer) {
+      clearTimeout(this.capacityCheckTimer);
+      this.capacityCheckTimer = null;
+    }
 
     if (this.audioMeterInterval) {
       clearInterval(this.audioMeterInterval);

@@ -156,7 +156,8 @@ export class RoomChat {
     const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files');
     const inCall = () => {
       const cs = document.getElementById('call-screen');
-      return !!this.getWebrtc() && cs && !cs.classList.contains('hidden');
+      const rtc = this.getWebrtc();
+      return !!rtc && !rtc.isObserver && cs && !cs.classList.contains('hidden');
     };
     let dragDepth = 0;
     document.addEventListener('dragenter', (e) => {
@@ -303,7 +304,7 @@ export class RoomChat {
   sendText(raw) {
     const text = (raw || '').trim().slice(0, 1000);
     const rtc = this.getWebrtc();
-    if (!text || !rtc) return;
+    if (!text || !rtc || rtc.isObserver) return; // observador só lê o chat da mesa
     if (this.pushEntry({ kind: 'text', from: rtc.myPeerId, name: rtc.userInfo.name, text, ts: Date.now() })) return;
     // Fallback sem Firebase: DataChannel (sem histórico)
     rtc.broadcastRpgAction({ type: 'chat-msg', text });
@@ -328,7 +329,7 @@ export class RoomChat {
 
   async offerFile(file) {
     const rtc = this.getWebrtc();
-    if (!rtc) return;
+    if (!rtc || rtc.isObserver) return;
     if (file.size > MAX_FILE_BYTES) {
       this.addEntry({ system: true, text: `Arquivo "${file.name}" é maior que ${fmtSize(MAX_FILE_BYTES)} e não foi enviado.` });
       return;

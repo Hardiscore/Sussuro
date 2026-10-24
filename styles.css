@@ -3738,3 +3738,143 @@ video.filter-arcane-night {
   -webkit-backdrop-filter: none !important;
   box-shadow: none !important;
 }
+
+/* ==========================================================================
+   TELA DE BOAS-VINDAS (somente navegador comum; app Electron e PWA instalado pulam)
+   ========================================================================== */
+#welcome-screen {
+  display: none;
+}
+
+html.show-welcome,
+html.show-welcome body {
+  overflow: hidden;
+}
+
+html.show-welcome #welcome-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: radial-gradient(ellipse at center, #2b2d31 0%, var(--bg-app) 70%);
+}
+
+.welcome-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  text-align: center;
+  max-width: 420px;
+  width: 100%;
+}
+
+.welcome-logo {
+  width: 140px;
+  height: 140px;
+  border-radius: 28px;
+  box-shadow: var(--shadow-elevation-high);
+}
+
+.welcome-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-bright);
+  line-height: 1.3;
+}
+
+.welcome-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  margin-top: 8px;
+}
+
+.welcome-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 280px;
+  padding: 12px 20px;
+  font-size: 15px;
+  text-decoration: none;
+}
+
+.welcome-link {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  padding: 4px 8px;
+}
+
+.welcome-link:hover {
+  color: var(--text-normal);
+}
+
+.welcome-signature {
+  position: absolute;
+  right: 16px;
+  bottom: 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+/* Desktop mostra o download do Windows; celular mostra a instalação do PWA */
+.welcome-mobile-only {
+  display: none !important;
+}
+
+html.welcome-mobile .welcome-mobile-only {
+  display: inline-flex !important;
+}
+
+html.welcome-mobile .welcome-desktop-only {
+  display: none !important;
+}
+
+/* ==========================================================================
+   MODO OBSERVADOR (assiste e ouve; não aparece no grid nem interage com a mesa)
+   ========================================================================== */
+#btn-observer-join-main {
+  display: none;
+}
+
+html.observer-mode #btn-observer-join-main {
+  display: inline-flex;
+}
+
+/* Na barra do observador ficam só: microfone (voz entre observadores), chat, participar e sair */
+html.observer-mode #btn-toggle-cam,
+html.observer-mode #btn-cam-arrow,
+html.observer-mode #btn-share-screen,
+html.observer-mode #btn-open-filters,
+html.observer-mode #btn-toggle-dice-panel,
+html.observer-mode #btn-control-settings,
+html.observer-mode #btn-become-observer,
+html.observer-mode #btn-gm-mute-all,
+html.observer-mode #chat-form {
+  display: none !important;
+}
+
+/* O próprio observador não ocupa espaço no grid */
+.video-tile.observer-hidden {
+  display: none !important;
+}
+
+#btn-observer-join-main {
+  width: auto;
+  padding: 0 8px;
+  color: var(--accent-green);
+}
