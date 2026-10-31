@@ -3,6 +3,7 @@
  *  - Só texto, guardado no Firebase em rooms/<sala>/observerChat (some junto com a sala).
  *  - Fica como uma segunda aba ("👁 Observadores") dentro da janela do chat da sala (#chat-panel).
  *  - Os jogadores não veem esta aba; ela também lista quem está observando.
+ *  - Sussurro: o observador marca um ou mais jogadores para ouvirem só a voz dele.
  */
 
 import { ref, set, onChildAdded } from './firebase-config.js';
@@ -21,6 +22,9 @@ html.observer-mode #chat-tabs { display: flex; }
 #observer-chat-view { display: none; flex: 1; min-height: 0; flex-direction: column; }
 #chat-panel.obs-tab #observer-chat-view { display: flex; }
 #chat-panel.obs-tab #chat-messages { display: none; }
+#observer-whisper-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, #3f4147); font-size: 12px; color: var(--text-muted, #949ba4); }
+#observer-whisper-list { display: flex; flex-wrap: wrap; gap: 6px; }
+#observer-whisper-list label { display: flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 9999px; background: var(--bg-card, #313338); color: var(--text-normal, #dbdee1); cursor: pointer; }
 #observer-chat-people { padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, #3f4147); font-size: 12px;
   color: var(--text-muted, #949ba4); display: flex; flex-wrap: wrap; gap: 6px; }
 #observer-chat-people .ochat-person { padding: 2px 8px; border-radius: 9999px; background: var(--bg-card, #313338);
@@ -40,6 +44,7 @@ html.observer-mode #chat-tabs { display: flex; }
 `;
 
 const EMPTY_TEXT = 'Só os observadores veem este chat. Os jogadores não ouvem nem leem vocês.';
+const NO_PLAYERS_TEXT = 'ninguém na mesa ainda';
 
 export class ObserverChat {
   /**
@@ -54,6 +59,12 @@ export class ObserverChat {
     this.seen = new Set();
     this.unread = 0;
     this.attachedAt = 0;
+    this.whisperKey = null;
+    this.whisperTimer = null;
+    // Sussurro: app.js preenche estes
+    this.getPlayers = null;       // () => [{ peerId, name }] jogadores na mesa
+    this.getActiveWhisper = null; // () => [peerId] quem está recebendo o sussurro agora
+    this.onWhisperChange = null;  // ([peerId]) => void, quando o observador marca/desmarca
   }
 
   /**
@@ -84,6 +95,10 @@ export class ObserverChat {
     const view = document.createElement('div');
     view.id = 'observer-chat-view';
     view.innerHTML = `
+      <div id="observer-whisper-row">
+        <span>🎙 Sussurrar para:</span>
+        <div id="observer-whisper-list"><span class="ochat-empty">${NO_PLAYERS_TEXT}</span></div>
+      </div>
       <div id="observer-chat-people"></div>
       <div id="observer-chat-messages"><div class="ochat-empty">${EMPTY_TEXT}</div></div>
       <form id="observer-chat-form" autocomplete="off">
@@ -98,6 +113,9 @@ export class ObserverChat {
       this.send(input.value);
       input.value = '';
     });
+
+    // Lista de jogadores para sussurrar: atualiza quando alguém entra ou sai
+    this.whisperTimer = setInterval(() => this.refreshWhisperOptions(), 2000);
 
     // Bolinha no botão do chat quando chega mensagem dos observadores
     const chatBtn = document.getElementById('chat-toggle-btn');
@@ -147,6 +165,44 @@ export class ObserverChat {
       b.classList.toggle('hidden', this.unread === 0);
     }
     document.getElementById('observer-chat-dot')?.classList.toggle('hidden', this.unread === 0);
+  }
+
+  /**
+   * Reconstrói a lista de jogadores (caixas de seleção) só quando algo mudou,
+   * para não atrapalhar o clique do observador.
+   */
+  refreshWhisperOptions() {
+    const box = document.getElementById('observer-whisper-list');
+    if (!box) return;
+    if (!document.documentElement.classList.contains('observer-mode')) return;
+
+    const players = typeof this.getPlayers === 'function' ? this.getPlayers() : [];
+    const active = new Set(typeof this.getActiveWhisper === 'function' ? this.getActiveWhisper() : []);
+    const key = players.map(p => `${p.peerId}:${p.name}`).join('|') + '#' + [...active].sort().join(',');
+    if (key === this.whisperKey) return;
+    this.whisperKey = key;
+
+    box.innerHTML = '';
+    if (players.length === 0) {
+      box.innerHTML = `<span class="ochat-empty">${NO_PLAYERS_TEXT}</span>`;
+      return;
+    }
+    players.forEach(p => {
+      const label = document.createElement('label');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = p.peerId;
+      cb.checked = active.has(p.peerId);
+      cb.addEventListener('change', () => this.emitWhisper());
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(' ' + p.name));
+      box.appendChild(label);
+    });
+  }
+
+  emitWhisper() {
+    const ids = [...document.querySelectorAll('#observer-whisper-list input[type="checkbox"]:checked')].map(i => i.value);
+    if (typeof this.onWhisperChange === 'function') this.onWhisperChange(ids);
   }
 
   /** Lista de observadores conectados (você incluso). */
@@ -234,6 +290,9 @@ export class ObserverChat {
     const l = this.list;
     if (l) l.innerHTML = `<div class="ochat-empty">${EMPTY_TEXT}</div>`;
     this.setPeople([]);
+    this.whisperKey = null;
+    const box = document.getElementById('observer-whisper-list');
+    if (box) box.innerHTML = `<span class="ochat-empty">${NO_PLAYERS_TEXT}</span>`;
     this.selectTab('mesa');
   }
 }

@@ -359,7 +359,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.2.1';
+export const APP_VERSION = '1.2.2';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -669,6 +669,28 @@ function generateRpgRoomName() {
 // ============================================================================
 const roomChat = new RoomChat(() => state.webrtc);
 const observerChat = new ObserverChat(() => state.webrtc);
+// Sussurro: seletor "Sussurrar para" no painel dos observadores
+observerChat.getPlayers = () => state.webrtc
+  ? [...state.webrtc.peers.values()]
+      .filter(p => !p.peerInfo?.observer)
+      .map(p => ({ peerId: p.peerId, name: p.peerInfo?.name || 'Aventureiro' }))
+  : [];
+observerChat.getActiveWhisper = () => state.webrtc ? [...state.webrtc.whisperTargets] : [];
+observerChat.onWhisperChange = (ids) => {
+  if (!state.webrtc) return;
+  const wanted = ids || [];
+  const active = state.webrtc.setWhisperTargets(wanted);
+  observerChat.refreshWhisperOptions();
+  if (wanted.length === 0) return;
+  const names = active
+    .map(id => observerChat.getPlayers().find(p => p.peerId === id)?.name)
+    .filter(Boolean);
+  if (active.length < wanted.length) {
+    showLayoutNotification('🎙 Não foi possível sussurrar para um dos jogadores. Tente de novo.');
+  } else {
+    showLayoutNotification(`🎙 Você está sussurrando só para: ${names.join(', ')}.`);
+  }
+};
 const lobbyChat = new LobbyChat({
   getName: () => (document.getElementById('input-user-name')?.value || state.userName || 'Aventureiro').trim().slice(0, 32),
   isInCall: () => !!state.isInCall,
@@ -1684,10 +1706,31 @@ async function startCall(roomId, options = {}) {
       showLayoutNotification('👁 A mesa lotou (15 pessoas): sua vaga de observador foi liberada para um jogador.');
     },
 
+    onWhisperState: (peerId, peerInfo, active, stream) => {
+      // Jogador: o observador começou ou parou de sussurrar para mim
+      if (active && stream) {
+        attachWhisperAudio(peerId, stream);
+        showLayoutNotification(`🎙 ${peerInfo?.name || 'Um observador'} está sussurrando só para você.`);
+      } else {
+        detachWhisperAudio(peerId);
+      }
+    },
+
+    onWhisperTargetChanged: () => {
+      observerChat.refreshWhisperOptions();
+    },
+
+    onPeerMediaStalled: (peerId, peerInfo, stream, step) => {
+      // Passo 1 do reparo: o áudio parou de chegar, então reanexa o elemento de áudio do tile
+      reattachPeerAudio(peerId, stream);
+      console.warn(`[Audio] Reanexando áudio de ${peerInfo?.name || peerId} (passo ${step}).`);
+    },
+
     onPeerStreamRemoved: (peerId, peerInfo) => {
       // Observador saindo: sem som, sem aviso e sem tile para remover
       if (peerInfo && peerInfo.observer) {
         detachObserverAudio(peerId);
+        detachWhisperAudio(peerId);
         return;
       }
       try { roomChat.peerLeft(peerId); } catch (e) {}
@@ -1926,6 +1969,111 @@ function leaveCall(options = {}) {
 function applyObserverModeUi() {
   document.documentElement.classList.toggle('observer-mode', !!state.isObserver);
   document.getElementById('tile-local')?.classList.toggle('observer-hidden', !!state.isObserver);
+  updateWhisperButton();
+}
+
+// Sussurro: botão "🎙 Sussurrar" na barra de controles (só para observador) + lista de jogadores
+function setupWhisperButton() {
+  if (document.getElementById('btn-whisper')) return;
+  const anchor = document.getElementById('chat-toggle-btn') || document.getElementById('btn-observer-join-main');
+  if (!anchor) return;
+
+  const style = document.createElement('style');
+  style.textContent = `
+    #whisper-popover { position: fixed; z-index: 9999; min-width: 220px; max-width: 280px; background: var(--bg-card, #313338);
+      border: 1px solid var(--border-subtle, #3f4147); border-radius: 10px; padding: 10px 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,.45); color: var(--text-normal, #dbdee1); font-size: 13px; }
+    #whisper-popover.hidden { display: none; }
+    #whisper-popover label { display: flex; align-items: center; gap: 6px; padding: 4px 0; cursor: pointer; }
+    #whisper-popover .whisper-pop-title { font-weight: 700; margin-bottom: 6px; }
+    #whisper-popover .whisper-pop-hint { font-size: 11px; color: var(--text-muted, #949ba4); margin-top: 6px; }
+    #btn-whisper.active { background: var(--accent-blurple, #5865f2); color: #fff; }
+  `;
+  document.head.appendChild(style);
+
+  const btn = document.createElement('button');
+  btn.id = 'btn-whisper';
+  btn.type = 'button';
+  btn.className = 'control-btn hidden';
+  btn.setAttribute('data-tooltip', 'Sussurrar: só os jogadores marcados ouvem você');
+  btn.setAttribute('aria-label', 'Sussurrar');
+  btn.textContent = '🎙';
+  anchor.after(btn);
+
+  const pop = document.createElement('div');
+  pop.id = 'whisper-popover';
+  pop.className = 'hidden';
+  pop.innerHTML = `
+    <div class="whisper-pop-title">🎙 Sussurrar só para:</div>
+    <div id="whisper-pop-list"></div>
+    <div class="whisper-pop-hint">Só os marcados ouvem você. Desmarque todos para parar.</div>`;
+  document.body.appendChild(pop);
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = pop.classList.toggle('hidden') === false;
+    if (isOpen) {
+      // A barra fica no topo: a lista abre para baixo do botão, dentro da tela
+      const r = btn.getBoundingClientRect();
+      pop.style.top = (r.bottom + 8) + 'px';
+      pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - 300)) + 'px';
+      pop.style.bottom = 'auto';
+      renderWhisperPopover(true);
+    }
+  });
+  document.addEventListener('click', (e) => {
+    if (!pop.contains(e.target) && e.target !== btn) pop.classList.add('hidden');
+  });
+  setInterval(() => {
+    if (!pop.classList.contains('hidden')) renderWhisperPopover(false);
+  }, 1500);
+}
+
+let whisperPopKey = null;
+function renderWhisperPopover(force) {
+  const list = document.getElementById('whisper-pop-list');
+  if (!list) return;
+  const players = observerChat.getPlayers();
+  const active = new Set(observerChat.getActiveWhisper());
+  const key = players.map(p => `${p.peerId}:${p.name}`).join('|') + '#' + [...active].sort().join(',');
+  if (!force && key === whisperPopKey) return;
+  whisperPopKey = key;
+
+  list.innerHTML = '';
+  if (players.length === 0) {
+    list.innerHTML = '<div class="whisper-pop-hint">Ninguém na mesa ainda.</div>';
+  }
+  players.forEach(p => {
+    const label = document.createElement('label');
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.value = p.peerId;
+    cb.checked = active.has(p.peerId);
+    cb.addEventListener('change', () => {
+      const ids = [...list.querySelectorAll('input[type="checkbox"]:checked')].map(i => i.value);
+      observerChat.onWhisperChange(ids);
+      renderWhisperPopover(true);
+      updateWhisperButtonState();
+    });
+    label.appendChild(cb);
+    label.appendChild(document.createTextNode(' ' + p.name));
+    list.appendChild(label);
+  });
+  updateWhisperButtonState();
+}
+
+function updateWhisperButtonState() {
+  const btn = document.getElementById('btn-whisper');
+  if (btn) btn.classList.toggle('active', observerChat.getActiveWhisper().length > 0);
+}
+
+function updateWhisperButton() {
+  setupWhisperButton();
+  const btn = document.getElementById('btn-whisper');
+  const pop = document.getElementById('whisper-popover');
+  if (btn) btn.classList.toggle('hidden', !state.isObserver);
+  if (pop && !state.isObserver) pop.classList.add('hidden');
+  updateWhisperButtonState();
 }
 
 /**
@@ -1956,6 +2104,46 @@ function attachObserverAudio(peerId, stream) {
   }
   if (audio.srcObject !== stream) audio.srcObject = stream;
   audio.play().catch(() => {});
+}
+
+/**
+ * Refaz o elemento <audio> de um participante com o stream atual (sem recriar o tile).
+ * Usado quando o áudio parou de chegar: às vezes o elemento fica preso no stream antigo.
+ */
+function reattachPeerAudio(peerId, stream) {
+  const tile = document.getElementById(`tile-${peerId}`);
+  const audio = tile && tile.querySelector('audio');
+  if (!audio || !stream) return;
+  audio.srcObject = null;
+  audio.srcObject = stream;
+  const vol = state.peerVolumes[peerId] !== undefined ? state.peerVolumes[peerId] : 100;
+  const isMuted = (vol === 0 || !!state.localStreamMutes[peerId]);
+  audio.muted = isMuted;
+  audio.volume = isMuted ? 0 : Math.min(1.0, vol / 100);
+  audio.play().catch(() => {});
+}
+
+// Sussurro: voz de um observador só para este jogador (sem tile no grid)
+function attachWhisperAudio(peerId, stream) {
+  let audio = document.getElementById(`whisper-audio-${peerId}`);
+  if (!audio) {
+    audio = document.createElement('audio');
+    audio.id = `whisper-audio-${peerId}`;
+    audio.className = 'observer-voice-audio';
+    audio.autoplay = true;
+    audio.setAttribute('playsinline', '');
+    document.body.appendChild(audio);
+  }
+  if (audio.srcObject !== stream) audio.srcObject = stream;
+  audio.play().catch(() => {});
+}
+
+function detachWhisperAudio(peerId) {
+  const audio = document.getElementById(`whisper-audio-${peerId}`);
+  if (audio) {
+    audio.srcObject = null;
+    audio.remove();
+  }
 }
 
 function detachObserverAudio(peerId) {

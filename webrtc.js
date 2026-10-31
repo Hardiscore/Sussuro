@@ -189,6 +189,12 @@ export class TavernWebRTC {
     this.onObserverVoiceAdded = options.onObserverVoiceAdded || (() => {});
     this.onObserversChanged = options.onObserversChanged || (() => {});
     this.onObserverCapacityExceeded = options.onObserverCapacityExceeded || (() => {});
+    // Sussurro: observador fala com um ou mais jogadores (ver setWhisperTargets)
+    this.whisperTargets = new Set();
+    this.onWhisperState = options.onWhisperState || (() => {});
+    this.onWhisperTargetChanged = options.onWhisperTargetChanged || (() => {});
+    // Chamado quando o áudio de um peer parou de chegar (passo 1 do reparo: reanexar na tela)
+    this.onPeerMediaStalled = options.onPeerMediaStalled || (() => {});
   }
 
   /**
@@ -1766,7 +1772,9 @@ export class TavernWebRTC {
       pendingCandidates: [],
       isPolite,
       makingOffer: false,
-      ignoreOffer: false
+      ignoreOffer: false,
+      // Estado do vigia de áudio e das tentativas de reparo (ver checkPeerMedia)
+      health: { lastBytes: 0, lastProgress: Date.now(), lastAction: 0, next: 0, cycles: 0, waits: 0, gaveUp: false, checking: false }
     };
 
     // Adiciona faixas locais de microfone e câmera à conexão.
@@ -1829,9 +1837,18 @@ export class TavernWebRTC {
     pc.oniceconnectionstatechange = () => {
       console.log(`[WebRTC] ICE com ${peerId}: ${pc.iceConnectionState}`);
       if (pc.iceConnectionState === 'failed') {
-        pc.restartIce();
-      } else if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'closed') {
-        // Pode ser desconexão temporária ou saída
+        // restartIce() sozinho não renegocia (não há handler de negotiationneeded): renegocia de verdade
+        console.warn(`[WebRTC][ICE] Conexão com ${peerId} falhou. Renegociando.`);
+        this.retryNegotiation(peerId, 'ice-failed');
+      } else if (pc.iceConnectionState === 'disconnected') {
+        // Pode ser oscilação temporária: se continuar desconectado, renegocia
+        setTimeout(() => {
+          const p = this.peers.get(peerId);
+          if (p && p.connection === pc && pc.iceConnectionState === 'disconnected') {
+            console.warn(`[WebRTC][ICE] ${peerId} continua desconectado. Renegociando.`);
+            this.retryNegotiation(peerId, 'ice-disconnected');
+          }
+        }, 5000);
       }
     };
 
@@ -1839,6 +1856,9 @@ export class TavernWebRTC {
       console.log(`[WebRTC] Estado de conexão com ${peerId}: ${pc.connectionState}`);
       if (pc.connectionState === 'connected') {
         this.applyQualityProfileToConnection(pc);
+      } else if (pc.connectionState === 'failed') {
+        console.warn(`[WebRTC][conexão] Conexão com ${peerId} falhou. Renegociando.`);
+        this.retryNegotiation(peerId, 'conn-failed');
       }
     };
 
@@ -1850,7 +1870,15 @@ export class TavernWebRTC {
 
       // Mídia vinda de observador: jogadores ignoram; observadores só recebem a voz (sem tile no grid)
       if (peerData.peerInfo?.observer) {
-        if (!this.isObserver || track.kind !== 'audio') return;
+        if (track.kind !== 'audio') return;
+        if (!this.isObserver) {
+          // Sussurro: o observador manda a voz só para este jogador (sem tile e sem repassar)
+          // Uma faixa nova a cada vez que o observador começa a sussurrar
+          peerData.whisperStream = new MediaStream([track]);
+          console.log(`[Sussurro] Voz de observador recebida de ${peerData.peerInfo?.name || peerId}.`);
+          if (peerData.whisperActive) this.onWhisperState(peerId, peerData.peerInfo, true, peerData.whisperStream);
+          return;
+        }
         if (!peerData.remoteStream.getTracks().includes(track)) peerData.remoteStream.addTrack(track);
         this.setupRemoteAudioAnalyser(peerId, peerData.remoteStream);
         track.onunmute = () => this.onObserverVoiceAdded(peerId, peerData.peerInfo, peerData.remoteStream);
@@ -1984,6 +2012,7 @@ export class TavernWebRTC {
       }
     };
 
+    this.startPeerWatchdog(peerId, peerData);
     return peerData;
   }
 
@@ -2083,6 +2112,25 @@ export class TavernWebRTC {
             console.warn('[WebRTC] Erro ao enviar oferta de renegociação:', err);
           }
         }
+      }
+      return;
+    }
+
+    // Passo 3 do reparo: o outro lado pediu para renegociar (eu sou quem tem a conexão)
+    if (signal.type === 'renegotiate') {
+      if (this.peers.has(fromPeerId)) {
+        console.warn(`[WebRTC][negociação] ${fromPeerId} pediu renegociação.`);
+        this.retryNegotiation(fromPeerId, 'pedido-do-outro-lado');
+      }
+      return;
+    }
+
+    // Sussurro: o observador avisa que está falando só comigo (não cria peer novo por isso)
+    if (signal.type === 'whisper-state') {
+      const whisperPeer = this.peers.get(fromPeerId);
+      if (whisperPeer && whisperPeer.peerInfo?.observer && !this.isObserver) {
+        whisperPeer.whisperActive = !!signal.active;
+        this.onWhisperState(fromPeerId, whisperPeer.peerInfo, !!signal.active, whisperPeer.whisperStream || null);
       }
       return;
     }
@@ -2260,7 +2308,9 @@ export class TavernWebRTC {
         }
       }
     } catch (err) {
-      console.error(`[WebRTC] Falha ao processar sinal de ${fromPeerId}:`, err);
+      // Antes isso era só um console.error e a conversa ficava parada. Agora tenta de novo.
+      console.error(`[WebRTC][negociação] Falha ao processar "${signal.type}" de ${fromPeerId}:`, err);
+      this.retryNegotiation(fromPeerId, 'erro-' + signal.type);
     }
   }
 
@@ -2392,8 +2442,210 @@ export class TavernWebRTC {
   }
 
   /**
-   * Encerra conexão com um peer específico
+   * Sussurro (só observador): manda a voz para um ou mais jogadores, sem os outros ouvirem.
+   * Reaproveita o transceiver de áudio que já existe em cada conexão, então não precisa
+   * renegociar: só os jogadores escolhidos recebem a faixa.
+   * @param {string[]} ids jogadores escolhidos (lista vazia para parar)
+   * @returns {string[]} jogadores que estão recebendo o sussurro agora
    */
+  setWhisperTargets(ids) {
+    if (!this.isObserver) return [];
+    const wanted = new Set((ids || []).filter(id => {
+      const p = this.peers.get(id);
+      return !!(p && p.connection && !p.peerInfo?.observer);
+    }));
+    for (const id of [...this.whisperTargets]) {
+      if (!wanted.has(id)) this.stopWhisperTo(id);
+    }
+    for (const id of wanted) {
+      if (!this.whisperTargets.has(id)) this.startWhisperTo(id);
+    }
+    return [...this.whisperTargets];
+  }
+
+  startWhisperTo(peerId) {
+    const peer = this.peers.get(peerId);
+    if (!peer || !peer.connection || peer.peerInfo?.observer) return false;
+    const track = this.processedAudioTrack || this.localStream?.getAudioTracks()[0];
+    if (!track) return false;
+    if (!peer.whisperSender) {
+      // Adiciona a faixa na conexão e renegocia (mesmo caminho da câmera e da tela, que já funcionam)
+      peer.whisperSender = peer.connection.addTrack(track, this.localStream || new MediaStream([track]));
+    }
+    this.whisperTargets.add(peerId);
+    console.log(`[Sussurro] Enviando voz só para ${peer.peerInfo?.name || peerId}.`);
+    this.sendSignal(peerId, { type: 'whisper-state', active: true }).catch(() => {});
+    this.retryNegotiation(peerId, 'sussurro', false);
+    return true;
+  }
+
+  stopWhisperTo(peerId) {
+    const peer = this.peers.get(peerId);
+    if (peer && peer.whisperSender) {
+      try { peer.connection.removeTrack(peer.whisperSender); } catch (e) {}
+      peer.whisperSender = null;
+      this.retryNegotiation(peerId, 'fim-do-sussurro', false);
+    }
+    this.whisperTargets.delete(peerId);
+    this.sendSignal(peerId, { type: 'whisper-state', active: false }).catch(() => {});
+  }
+
+  findAudioTransceiver(pc) {
+    return pc.getTransceivers().find(t => t.receiver && t.receiver.track && t.receiver.track.kind === 'audio') || null;
+  }
+
+  /**
+   * Vigia se o áudio de cada peer continua chegando. Se parar (e o outro não estiver mutado),
+   * tenta em ordem, cada passo depois de mais 8 s sem progresso:
+   * 1) reanexa o áudio na tela; 2) renegocia com ICE restart; 3) recria a conexão
+   * (o lado impolite recria; o polite pede para o outro renegociar); 4) renegocia de novo.
+   * Depois de 3 ciclos completos desiste até o áudio voltar a chegar.
+   */
+  startPeerWatchdog(peerId, peerData) {
+    peerData.watchdog = setInterval(() => {
+      if (this.peers.get(peerId) !== peerData) {
+        clearInterval(peerData.watchdog);
+        return;
+      }
+      this.checkPeerMedia(peerId, peerData);
+    }, 2000);
+  }
+
+  async checkPeerMedia(peerId, peerData) {
+    const h = peerData.health;
+    const pc = peerData.connection;
+    if (!h || !pc || pc.connectionState === 'closed' || h.checking) return;
+    h.checking = true;
+    try {
+      let bytes = 0;
+      try {
+        const stats = await pc.getStats();
+        stats.forEach(r => {
+          if (r.type === 'inbound-rtp' && (r.kind === 'audio' || r.mediaType === 'audio')) bytes += r.bytesReceived || 0;
+        });
+      } catch (e) {}
+
+      const now = Date.now();
+      const name = peerData.peerInfo?.name || peerId;
+      const remoteMuted = !!peerData.peerInfo?.audioMuted;
+      // Observador não manda áudio para jogador (só quando está sussurrando): não é falha
+      const audioExpected = !(peerData.peerInfo?.observer && !this.isObserver && !peerData.whisperActive);
+
+      if (bytes > h.lastBytes || remoteMuted || !audioExpected) {
+        h.lastBytes = bytes;
+        h.lastProgress = now;
+        h.next = 0;
+        h.cycles = 0;
+        h.gaveUp = false;
+        return;
+      }
+
+      if (h.gaveUp) return;
+      if (now - Math.max(h.lastProgress, h.lastAction || 0) < 8000) return;
+
+      const step = h.next;
+      h.lastAction = now;
+      h.next++;
+      if (h.next > 3) {
+        h.next = 0;
+        h.cycles++;
+      }
+      if (h.cycles >= 3) {
+        h.gaveUp = true;
+        console.warn(`[WebRTC][áudio] Desisti de reconectar o áudio de ${name} (${pc.connectionState}). Vou tentar de novo quando o áudio voltar a chegar.`);
+        return;
+      }
+
+      if (step === 0) {
+        console.warn(`[WebRTC][áudio] Sem áudio chegando de ${name} (conexão ${pc.connectionState}). Passo 1: reanexando o áudio na tela.`);
+        this.onPeerMediaStalled(peerId, peerData.peerInfo, peerData.remoteStream, 1);
+      } else if (step === 1) {
+        console.warn(`[WebRTC][áudio] Continua sem áudio de ${name}. Passo 2: renegociando a conexão (ICE restart).`);
+        this.retryNegotiation(peerId, 'sem-audio');
+      } else if (step === 2) {
+        if (!peerData.isPolite) {
+          console.warn(`[WebRTC][áudio] Continua sem áudio de ${name}. Passo 3: recriando a conexão.`);
+          await this.rebuildPeerConnection(peerId);
+        } else {
+          console.warn(`[WebRTC][áudio] Continua sem áudio de ${name}. Passo 3: pedindo para o outro lado recriar/renegociar.`);
+          this.sendSignal(peerId, { type: 'renegotiate' }).catch(() => {});
+        }
+      } else {
+        console.warn(`[WebRTC][áudio] Continua sem áudio de ${name}. Passo 4: nova renegociação.`);
+        this.retryNegotiation(peerId, 'sem-audio-2');
+      }
+    } finally {
+      h.checking = false;
+    }
+  }
+
+  /**
+   * Cria uma nova RTCPeerConnection com o mesmo jogador, sem tirar o tile da tela
+   * (não dispara "saiu da sala"), e manda uma nova oferta.
+   */
+  async rebuildPeerConnection(peerId) {
+    const old = this.peers.get(peerId);
+    if (!old) return;
+    const wasWhisperTarget = this.whisperTargets.has(peerId);
+    try { old.connection.close(); } catch (e) {}
+    this.peers.delete(peerId);
+
+    const fresh = this.createPeerConnection(peerId, old.peerInfo, old.isPolite);
+    fresh.health = old.health;
+    fresh.health.lastAction = Date.now();
+    this.peers.set(peerId, fresh);
+
+    if (!fresh.isPolite) {
+      try {
+        const offer = await fresh.connection.createOffer();
+        await fresh.connection.setLocalDescription(offer);
+        await this.sendSignal(peerId, {
+          type: 'offer',
+          isScreenShareOffer: !!this.isScreenSharing,
+          screenStreamId: this.screenStream ? this.screenStream.id : null,
+          hasScreenAudio: !!this.hasScreenAudio,
+          sdp: { type: fresh.connection.localDescription.type, sdp: fresh.connection.localDescription.sdp }
+        });
+      } catch (err) {
+        console.warn(`[WebRTC][negociação] Falha ao enviar oferta nova para ${peerId}:`, err);
+      }
+    }
+    if (wasWhisperTarget) {
+      this.whisperTargets.delete(peerId);
+      this.startWhisperTo(peerId);
+    }
+  }
+
+  /**
+   * Renegocia com ICE restart. Se o outro lado está no meio de outra negociação, espera e tenta de novo.
+   */
+  async retryNegotiation(peerId, reason, iceRestart = true) {
+    const peer = this.peers.get(peerId);
+    if (!peer || !peer.connection) return false;
+    const pc = peer.connection;
+    if (pc.signalingState !== 'stable') {
+      if (peer.health.waits < 10) {
+        peer.health.waits++;
+        setTimeout(() => this.retryNegotiation(peerId, reason, iceRestart), 1500);
+      }
+      return false;
+    }
+    peer.health.waits = 0;
+    try {
+      const offer = await pc.createOffer(iceRestart ? { iceRestart: true } : undefined);
+      await pc.setLocalDescription(offer);
+      await this.sendSignal(peerId, {
+        type: 'offer',
+        sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
+      });
+      console.log(`[WebRTC][negociação] Nova oferta enviada para ${peerId} (${reason}).`);
+      return true;
+    } catch (err) {
+      console.warn(`[WebRTC][negociação] Falha ao renegociar com ${peerId} (${reason}):`, err);
+      return false;
+    }
+  }
+
   closePeer(peerId) {
     this.cleanupRemoteAudioAnalyser(peerId);
     const peerObj = this.peers.get(peerId);
@@ -2402,6 +2654,9 @@ export class TavernWebRTC {
         peerObj.connection.close();
       }
       this.peers.delete(peerId);
+      if (this.whisperTargets.delete(peerId)) {
+        this.onWhisperTargetChanged([...this.whisperTargets]);
+      }
       this.onPeerStreamRemoved(peerId, peerObj.peerInfo);
       if (peerObj.peerInfo?.observer) this.notifyObserversChanged();
       console.log(`[WebRTC] Peer removido: ${peerId}`);

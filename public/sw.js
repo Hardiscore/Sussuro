@@ -1,5 +1,5 @@
-// Sussurro RPG - Service Worker v1.2.1 (Network-First Auto-Updating PWA)
-const CACHE_NAME = 'sussurro-rpg-v1.2.1';
+// Sussurro RPG - Service Worker v1.2.2 (Network-First Auto-Updating PWA)
+const CACHE_NAME = 'sussurro-rpg-v1.2.2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
