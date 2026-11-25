@@ -70,23 +70,16 @@ app.commandLine.appendSwitch('enable-hardware-overlays');
 app.commandLine.appendSwitch('enable-accelerated-video-decode');
 app.commandLine.appendSwitch('webrtc-max-cpu-consumption-percentage', '80');
 
-// Suporte a eventos globais de mouse via uiohook-napi
+// Suporte a atalhos globais de teclado e mouse via uiohook-napi (64-bit nativo, sem WinKeyServer.exe)
 let uIOhook = null;
+let UiohookKey = null;
+let uIOhookStarted = false;
 try {
   const uioModule = require('uiohook-napi');
   uIOhook = uioModule.uIOhook;
+  UiohookKey = uioModule.UiohookKey;
 } catch (err) {
   console.warn('[uIOhook] uiohook-napi não pôde ser carregado no ambiente atual:', err.message);
-}
-
-// Suporte a atalhos globais de teclado e mouse via RawInput (node-global-key-listener)
-let GlobalKeyboardListener = null;
-let globalKeyServer = null;
-try {
-  const gklModule = require('node-global-key-listener');
-  GlobalKeyboardListener = gklModule.GlobalKeyboardListener;
-} catch (err) {
-  console.warn('[GlobalKeyListener] node-global-key-listener não carregado:', err.message);
 }
 
 let mainWindow = null;
@@ -306,22 +299,16 @@ app.whenReady().then(() => {
 
   if (uIOhook) {
     try {
+      uIOhook.on('keydown', handleGlobalKeyDown);
+      uIOhook.on('keyup', handleGlobalKeyUp);
       uIOhook.on('mousedown', handleGlobalMouseDown);
       uIOhook.on('mouseup', handleGlobalMouseUp);
       uIOhook.start();
-      console.log('[uIOhook] Hook global de mouse e teclado inicializado com sucesso.');
+      uIOhookStarted = true;
+      console.log('[uIOhook] Hook global de teclado e mouse inicializado com sucesso.');
     } catch (err) {
+      uIOhookStarted = false;
       console.warn('[uIOhook] Falha ao inicializar uIOhook:', err);
-    }
-  }
-
-  if (GlobalKeyboardListener) {
-    try {
-      globalKeyServer = new GlobalKeyboardListener();
-      globalKeyServer.addListener(handleRawGlobalInput);
-      console.log('[GlobalKeyListener] Ouvinte de teclas e mouse global ativo via RawInput.');
-    } catch (err) {
-      console.warn('[GlobalKeyListener] Falha ao iniciar GlobalKeyboardListener:', err);
     }
   }
 
@@ -791,74 +778,256 @@ function convertToAccelerator(key) {
 
 let targetMouseButton = null;
 let activeRawHotkey = null;
+let activeHotkeySpec = null;
 let currentHotkeyMode = 'toggle';
 let isRecordingHotkey = false;
 let lastRawToggleTime = 0;
+let isHookPttPressed = false;
+let isMousePttPressed = false;
+const pressedKeycodes = new Set();
 
-function normalizeKeyName(name) {
-  if (!name) return '';
-  const n = String(name).trim().toUpperCase();
-  if (n === 'MOUSE X1' || n === 'MOUSE 4' || n === 'XBUTTON1') return 'mouse4';
-  if (n === 'MOUSE X2' || n === 'MOUSE 5' || n === 'XBUTTON2') return 'mouse5';
-  if (n === 'MOUSE MIDDLE' || n === 'MOUSE 3' || n === 'MIDDLE') return 'mouse3';
-  if (n.startsWith('NUMPAD ')) return n.replace('NUMPAD ', 'num').toLowerCase();
-  if (n.startsWith('PAGE ')) return n.replace('PAGE ', 'page').toLowerCase();
-  return n.toLowerCase().replace(/\s+/g, '');
+function buildUiohookKeycodeMap() {
+  const map = new Map();
+  if (!UiohookKey) return map;
+
+  const explicitMap = {
+    Backspace: 'backspace',
+    Tab: 'tab',
+    Enter: 'enter',
+    NumpadEnter: 'enter',
+    CapsLock: 'capslock',
+    Escape: 'escape',
+    Space: 'space',
+    PageUp: 'pageup',
+    PageDown: 'pagedown',
+    End: 'end',
+    Home: 'home',
+    ArrowLeft: 'arrowleft',
+    ArrowUp: 'arrowup',
+    ArrowRight: 'arrowright',
+    ArrowDown: 'arrowdown',
+    Insert: 'insert',
+    Delete: 'delete',
+    Numpad0: 'num0',
+    Numpad1: 'num1',
+    Numpad2: 'num2',
+    Numpad3: 'num3',
+    Numpad4: 'num4',
+    Numpad5: 'num5',
+    Numpad6: 'num6',
+    Numpad7: 'num7',
+    Numpad8: 'num8',
+    Numpad9: 'num9',
+    NumpadInsert: 'num0',
+    NumpadEnd: 'num1',
+    NumpadArrowDown: 'num2',
+    NumpadPageDown: 'num3',
+    NumpadArrowLeft: 'num4',
+    NumpadArrowRight: 'num6',
+    NumpadHome: 'num7',
+    NumpadArrowUp: 'num8',
+    NumpadPageUp: 'num9',
+    NumpadDelete: 'decimal',
+    NumpadMultiply: '*',
+    NumpadAdd: '+',
+    NumpadSubtract: '-',
+    NumpadDecimal: 'decimal',
+    NumpadDivide: '/',
+    Semicolon: ';',
+    Equal: '=',
+    Comma: ',',
+    Minus: '-',
+    Period: '.',
+    Slash: '/',
+    Backquote: '`',
+    BracketLeft: '[',
+    Backslash: '\\',
+    BracketRight: ']',
+    Quote: "'",
+    Ctrl: 'ctrl',
+    CtrlRight: 'ctrl',
+    Alt: 'alt',
+    AltRight: 'alt',
+    Shift: 'shift',
+    ShiftRight: 'shift',
+    Meta: 'meta',
+    MetaRight: 'meta',
+    NumLock: 'numlock',
+    ScrollLock: 'scrolllock',
+    PrintScreen: 'printscreen'
+  };
+
+  for (const [k, code] of Object.entries(UiohookKey)) {
+    if (typeof code !== 'number') continue;
+    if (explicitMap[k]) {
+      map.set(code, explicitMap[k]);
+    } else if (/^[A-Z]$/.test(k)) {
+      map.set(code, k.toLowerCase());
+    } else if (/^[0-9]$/.test(k)) {
+      map.set(code, k);
+    } else if (/^F([1-9]|1[0-9]|2[0-4])$/.test(k)) {
+      map.set(code, k.toLowerCase());
+    }
+  }
+
+  return map;
 }
 
-function handleRawGlobalInput(e) {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+const UIOHOOK_KEYCODE_TO_NAME = buildUiohookKeycodeMap();
 
-  const keyName = e.name;
+function normalizeSingleKeyToken(token) {
+  if (token === undefined || token === null) return '';
+  const raw = String(token);
+  if (raw === ' ') return 'space';
+  const clean = raw.trim().toLowerCase();
+  if (!clean) return 'space';
+  if (clean === 'spacebar') return 'space';
+  if (clean === 'control' || clean === 'commandorcontrol' || clean === 'ctrlleft' || clean === 'ctrlright') return 'ctrl';
+  if (clean === 'altleft' || clean === 'altright') return 'alt';
+  if (clean === 'shiftleft' || clean === 'shiftright') return 'shift';
+  if (clean === 'metaleft' || clean === 'metaright' || clean === 'os' || clean === 'win' || clean === 'super') return 'meta';
+  if (clean === 'esc') return 'escape';
+  if (clean === 'return' || clean === 'numpadenter' || clean === 'numpadreturn') return 'enter';
+  if (clean === 'equal' || clean === 'equals') return '=';
+  if (clean === 'minus') return '-';
+  if (clean === 'mouse x1' || clean === 'mouse 4' || clean === 'xbutton1' || clean === 'btn4' || clean === 'button4') return 'mouse4';
+  if (clean === 'mouse x2' || clean === 'mouse 5' || clean === 'xbutton2' || clean === 'btn5' || clean === 'button5') return 'mouse5';
+  if (clean === 'mouse middle' || clean === 'mouse 3' || clean === 'middle' || clean === 'btn3' || clean === 'button3') return 'mouse3';
+  if (/^numpad\s*\(?\d\)?$/.test(clean) || /^num\s*\(?\d\)?$/.test(clean)) {
+    const d = clean.match(/\d/);
+    if (d) return `num${d[0]}`;
+  }
+  if (clean.startsWith('page ')) return clean.replace('page ', 'page');
+  if (clean.startsWith('key') && clean.length === 4) return clean.slice(3);
+  if (clean.startsWith('digit') && clean.length === 6) return clean.slice(5);
+  return clean.replace(/\s+/g, '');
+}
+
+function normalizeKeyName(name) {
+  if (name === undefined || name === null) return '';
+  const raw = String(name);
+  if (raw === ' ') return 'space';
+  const trimmed = raw.trim();
+  if (!trimmed) return '';
+  if (trimmed.includes('+') && trimmed.length > 1) {
+    return trimmed.split('+').map(p => normalizeSingleKeyToken(p)).filter(Boolean).join('+');
+  }
+  return normalizeSingleKeyToken(trimmed);
+}
+
+function parseHotkeySpec(hotkeyStr) {
+  const norm = normalizeKeyName(hotkeyStr);
+  if (!norm) return null;
+  if (norm === '+') {
+    return { raw: '+', ctrl: false, alt: false, shift: false, meta: false, hasModifiers: false, key: '+' };
+  }
+  const parts = norm.split('+').filter(Boolean);
+  if (parts.length === 0) return null;
+  const spec = { raw: norm, ctrl: false, alt: false, shift: false, meta: false, hasModifiers: parts.length > 1, key: '' };
+  for (let i = 0; i < parts.length - 1; i++) {
+    const mod = parts[i];
+    if (mod === 'ctrl') spec.ctrl = true;
+    else if (mod === 'alt') spec.alt = true;
+    else if (mod === 'shift') spec.shift = true;
+    else if (mod === 'meta') spec.meta = true;
+  }
+  spec.key = parts[parts.length - 1];
+  return spec;
+}
+
+function resolveUiohookKeyName(e) {
+  if (!e || typeof e.keycode !== 'number') return '';
+  return UIOHOOK_KEYCODE_TO_NAME.get(e.keycode) || `key_${e.keycode}`;
+}
+
+function matchesHotkeyOnKeyDown(e, keyName, spec) {
+  if (!spec || !keyName || keyName !== spec.key) return false;
+  if (!spec.hasModifiers) return true;
+  return (!spec.ctrl || !!e.ctrlKey) &&
+         (!spec.alt || !!e.altKey) &&
+         (!spec.shift || !!e.shiftKey) &&
+         (!spec.meta || !!e.metaKey);
+}
+
+function handleGlobalKeyDown(e) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (typeof e.keycode !== 'number') return;
+
+  // Ignora repetição automática do Windows enquanto a tecla está segurada
+  if (pressedKeycodes.has(e.keycode)) return;
+  pressedKeycodes.add(e.keycode);
+
+  const keyName = resolveUiohookKeyName(e);
   if (!keyName) return;
 
-  const normalized = normalizeKeyName(keyName);
-
-  // Modo de gravação de atalho no modal de configurações
-  if (isRecordingHotkey && e.state === 'DOWN') {
-    if (keyName === 'MOUSE LEFT' || keyName === 'MOUSE RIGHT') return;
-
+  if (isRecordingHotkey) {
     try {
-      mainWindow.webContents.send('global-hotkey-recorded', { key: normalized });
-      if (normalized.startsWith('mouse')) {
-        const num = parseInt(normalized.replace('mouse', ''), 10);
-        mainWindow.webContents.send('global-mouse-down', { button: num });
+      if (keyName === 'escape') {
+        mainWindow.webContents.send('global-hotkey-recorded', { key: null });
+      } else {
+        mainWindow.webContents.send('global-hotkey-recorded', { key: keyName });
       }
     } catch (err) {}
     return;
   }
 
-  // Se o atalho configurado for acionado em qualquer janela ou jogo em segundo plano
-  if (activeRawHotkey && normalized === activeRawHotkey) {
+  if (activeHotkeySpec && matchesHotkeyOnKeyDown(e, keyName, activeHotkeySpec)) {
     try {
       if (currentHotkeyMode === 'push_to_talk') {
-        if (e.state === 'DOWN') {
-          mainWindow.webContents.send('push-to-talk-start', { key: normalized });
+        if (!isHookPttPressed) {
+          isHookPttPressed = true;
+          mainWindow.webContents.send('push-to-talk-start', { key: activeHotkeySpec.raw });
           mainWindow.webContents.send('global-hotkey-action', { type: 'ptt-start' });
-        } else if (e.state === 'UP') {
-          mainWindow.webContents.send('push-to-talk-stop', { key: normalized });
-          mainWindow.webContents.send('global-hotkey-action', { type: 'ptt-end' });
         }
-      } else if (e.state === 'DOWN') {
+      } else {
         const now = Date.now();
         if (now - lastRawToggleTime > 250) {
           lastRawToggleTime = now;
-          mainWindow.webContents.send('push-to-talk-toggle', { key: normalized });
+          mainWindow.webContents.send('push-to-talk-toggle', { key: activeHotkeySpec.raw });
           mainWindow.webContents.send('global-hotkey-action', { type: 'toggle-mute' });
         }
       }
     } catch (err) {
-      console.warn('[GlobalHotkey] Erro ao despachar evento RawInput:', err);
+      console.warn('[GlobalHotkey] Erro ao despachar evento uIOhook keydown:', err);
+    }
+  }
+}
+
+function handleGlobalKeyUp(e) {
+  if (typeof e.keycode === 'number') {
+    pressedKeycodes.delete(e.keycode);
+  }
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (isRecordingHotkey || !activeHotkeySpec || currentHotkeyMode !== 'push_to_talk' || !isHookPttPressed) return;
+
+  const keyName = resolveUiohookKeyName(e);
+  const releasedTarget = keyName === activeHotkeySpec.key;
+  const releasedModifier = activeHotkeySpec.hasModifiers && (
+    (activeHotkeySpec.ctrl && keyName === 'ctrl') ||
+    (activeHotkeySpec.alt && keyName === 'alt') ||
+    (activeHotkeySpec.shift && keyName === 'shift') ||
+    (activeHotkeySpec.meta && keyName === 'meta')
+  );
+
+  if (releasedTarget || releasedModifier) {
+    isHookPttPressed = false;
+    try {
+      mainWindow.webContents.send('push-to-talk-stop', { key: activeHotkeySpec.raw });
+      mainWindow.webContents.send('global-hotkey-action', { type: 'ptt-end' });
+    } catch (err) {
+      console.warn('[GlobalHotkey] Erro ao despachar evento uIOhook keyup:', err);
     }
   }
 }
 
 ipcMain.on('start-recording-hotkey', () => {
   isRecordingHotkey = true;
+  pressedKeycodes.clear();
 });
 
 ipcMain.on('stop-recording-hotkey', () => {
   isRecordingHotkey = false;
+  pressedKeycodes.clear();
 });
 
 function handleGlobalMouseDown(e) {
@@ -879,14 +1048,21 @@ function handleGlobalMouseDown(e) {
   if (targetMouseButton !== null && e.button === targetMouseButton) {
     try {
       if (currentHotkeyMode === 'push_to_talk') {
-        mainWindow.webContents.send('push-to-talk-start', { button: e.button });
-        mainWindow.webContents.send('global-hotkey-action', { type: 'ptt-start', button: e.button });
+        if (!isMousePttPressed) {
+          isMousePttPressed = true;
+          mainWindow.webContents.send('push-to-talk-start', { button: e.button });
+          mainWindow.webContents.send('global-hotkey-action', { type: 'ptt-start', button: e.button });
+        }
       } else {
-        mainWindow.webContents.send('push-to-talk-toggle', { button: e.button });
-        mainWindow.webContents.send('global-hotkey-action', { type: 'toggle-mute', button: e.button });
+        const now = Date.now();
+        if (now - lastRawToggleTime > 250) {
+          lastRawToggleTime = now;
+          mainWindow.webContents.send('push-to-talk-toggle', { button: e.button });
+          mainWindow.webContents.send('global-hotkey-action', { type: 'toggle-mute', button: e.button });
+        }
       }
     } catch (err) {
-      console.warn('[GlobalHotkey] Erro ao enviar push-to-talk:', err);
+      console.warn('[GlobalHotkey] Erro ao enviar evento de mouse:', err);
     }
   }
 }
@@ -894,14 +1070,13 @@ function handleGlobalMouseDown(e) {
 function handleGlobalMouseUp(e) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
-  if (targetMouseButton !== null && e.button === targetMouseButton) {
+  if (targetMouseButton !== null && e.button === targetMouseButton && currentHotkeyMode === 'push_to_talk') {
+    isMousePttPressed = false;
     try {
-      if (currentHotkeyMode === 'push_to_talk') {
-        mainWindow.webContents.send('push-to-talk-stop', { button: e.button });
-        mainWindow.webContents.send('global-hotkey-action', { type: 'ptt-end', button: e.button });
-      }
+      mainWindow.webContents.send('push-to-talk-stop', { button: e.button });
+      mainWindow.webContents.send('global-hotkey-action', { type: 'ptt-end', button: e.button });
     } catch (err) {
-      console.warn('[GlobalHotkey] Erro ao enviar ptt-end:', err);
+      console.warn('[GlobalHotkey] Erro ao enviar ptt-end de mouse:', err);
     }
   }
 }
@@ -909,6 +1084,10 @@ function handleGlobalMouseUp(e) {
 function unregisterActiveHotkey() {
   targetMouseButton = null;
   activeRawHotkey = null;
+  activeHotkeySpec = null;
+  isHookPttPressed = false;
+  isMousePttPressed = false;
+  pressedKeycodes.clear();
   if (currentRegisteredHotkey) {
     try {
       globalShortcut.unregister(currentRegisteredHotkey);
@@ -931,12 +1110,11 @@ ipcMain.on('register-global-hotkey', (event, { key, mode }) => {
 
   currentHotkeyMode = mode || 'toggle';
   activeRawHotkey = normalizeKeyName(key);
-  console.log(`[GlobalHotkey] Registrado via RawInput (node-global-key-listener): ${activeRawHotkey} (${currentHotkeyMode})`);
 
   const cleanKey = String(key).trim().toLowerCase();
 
   // Suporte nativo a botões extras de mouse (Mouse 4, Mouse 5, etc.) via uIOhook
-  if (cleanKey.startsWith('mouse') || cleanKey.startsWith('btn') || cleanKey.startsWith('button')) {
+  if (cleanKey.startsWith('mouse') || cleanKey.startsWith('btn') || cleanKey.startsWith('button') || cleanKey === 'middle') {
     const numMatch = cleanKey.match(/\d+/);
     if (numMatch) {
       targetMouseButton = parseInt(numMatch[0], 10);
@@ -948,21 +1126,25 @@ ipcMain.on('register-global-hotkey', (event, { key, mode }) => {
   }
 
   targetMouseButton = null;
+  activeHotkeySpec = parseHotkeySpec(activeRawHotkey);
 
+  if (uIOhookStarted && activeHotkeySpec) {
+    console.log(`[GlobalHotkey] Registrado via uIOhook: "${activeHotkeySpec.raw}" (${currentHotkeyMode})`);
+    return;
+  }
+
+  // Fallback com globalShortcut apenas se uIOhook não estiver ativo no ambiente
   const accelerator = convertToAccelerator(key);
   if (!accelerator) {
     console.warn(`[GlobalHotkey] Tecla inválida para acelerador: ${key}`);
     return;
   }
 
-  // Teclas "de digitar" (Espaço, letras, números, =, Enter...) NÃO podem ser registradas via globalShortcut:
-  // o sistema operacional engole a tecla e ela para de funcionar em todos os programas (inclusive no chat do Sussurro).
-  // Para elas usamos apenas o ouvinte passivo (RawInput), que enxerga a tecla sem bloqueá-la.
   const isSafeForOsGrab = /^F([1-9]|1[0-9]|2[0-4])$/i.test(accelerator) ||
     accelerator.includes('+') ||
     ['Insert', 'Home', 'End', 'PageUp', 'PageDown'].includes(accelerator);
   if (!isSafeForOsGrab) {
-    console.log(`[GlobalHotkey] "${accelerator}" é tecla de digitação: usando apenas ouvinte passivo (não bloqueia a digitação).`);
+    console.log(`[GlobalHotkey] "${accelerator}" é tecla de digitação e uIOhook está inativo; funcionando apenas com a janela focada.`);
     return;
   }
 
@@ -976,9 +1158,6 @@ ipcMain.on('register-global-hotkey', (event, { key, mode }) => {
           mainWindow.webContents.send('push-to-talk-start', { key: accelerator });
           mainWindow.webContents.send('global-hotkey-action', { type: 'ptt-start' });
         }
-        // No Windows/Linux/Mac, enquanto o usuário mantém a tecla pressionada no teclado,
-        // o sistema operacional envia pulsos de repetição de tecla contínuos.
-        // Se após 300ms nenhum novo pulso for recebido, a tecla foi solta pelo usuário.
         if (pttReleaseTimer) clearTimeout(pttReleaseTimer);
         pttReleaseTimer = setTimeout(() => {
           isPttActive = false;
@@ -988,7 +1167,6 @@ ipcMain.on('register-global-hotkey', (event, { key, mode }) => {
           }
         }, 500);
       } else {
-        // Alternar Mudo (Toggle)
         mainWindow.webContents.send('push-to-talk-toggle', { key: accelerator });
         mainWindow.webContents.send('global-hotkey-action', { type: 'toggle-mute' });
       }
@@ -996,7 +1174,7 @@ ipcMain.on('register-global-hotkey', (event, { key, mode }) => {
 
     if (success) {
       currentRegisteredHotkey = accelerator;
-      console.log(`[GlobalHotkey] Registrado globalmente no sistema: ${accelerator} (${currentHotkeyMode})`);
+      console.log(`[GlobalHotkey] Registrado globalmente via fallback: ${accelerator} (${currentHotkeyMode})`);
     } else {
       console.warn(`[GlobalHotkey] Não foi possível registrar o atalho global: ${accelerator} (já pode estar em uso pelo sistema)`);
     }
@@ -1012,18 +1190,11 @@ ipcMain.on('unregister-global-hotkey', () => {
 app.on('will-quit', () => {
   unregisterActiveHotkey();
   globalShortcut.unregisterAll();
-  if (globalKeyServer) {
-    try {
-      globalKeyServer.kill();
-      console.log('[GlobalKeyListener] Servidor RawInput encerrado com sucesso.');
-    } catch (err) {
-      console.warn('[GlobalKeyListener] Erro ao encerrar servidor:', err);
-    }
-  }
-  if (uIOhook) {
+  if (uIOhook && uIOhookStarted) {
     try {
       uIOhook.stop();
-      console.log('[uIOhook] Hook global de mouse encerrado com sucesso.');
+      uIOhookStarted = false;
+      console.log('[uIOhook] Hook global de teclado e mouse encerrado com sucesso.');
     } catch (err) {
       console.warn('[uIOhook] Erro ao encerrar uIOhook:', err);
     }

@@ -359,7 +359,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.2.3';
+export const APP_VERSION = '1.2.4';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -1359,9 +1359,24 @@ async function initLobbyPreview(fromUserGesture = false) {
 
   // 1. Tenta pedir Áudio + Vídeo juntos primeiro
   try {
-    const audioConstraints = state.selectedAudioDeviceId
-      ? { deviceId: { ideal: state.selectedAudioDeviceId }, echoCancellation: true, noiseSuppression: true }
-      : { echoCancellation: true, noiseSuppression: true };
+    let resolvedAudioId = state.selectedAudioDeviceId;
+    if ((!resolvedAudioId || resolvedAudioId === 'default' || resolvedAudioId === 'communications') && typeof navigator.mediaDevices.enumerateDevices === 'function') {
+      try {
+        const devs = await navigator.mediaDevices.enumerateDevices();
+        const audioInputs = devs.filter(d => d.kind === 'audioinput' && d.deviceId);
+        const aliasEntry = audioInputs.find(d => d.deviceId === (resolvedAudioId || 'default')) || audioInputs.find(d => d.deviceId === 'default');
+        if (aliasEntry && aliasEntry.groupId) {
+          const phys = audioInputs.find(d => d.groupId === aliasEntry.groupId && d.deviceId !== 'default' && d.deviceId !== 'communications');
+          if (phys) resolvedAudioId = phys.deviceId;
+        }
+      } catch (e) {}
+    }
+
+    const isRnnoise = state.noiseSuppressionMode === 'rnnoise';
+    const useEchoAndAgc = state.noiseSuppressionMode !== 'none';
+    const audioConstraints = (resolvedAudioId && resolvedAudioId !== 'default' && resolvedAudioId !== 'communications')
+      ? { deviceId: { ideal: resolvedAudioId }, echoCancellation: useEchoAndAgc, noiseSuppression: isRnnoise, autoGainControl: useEchoAndAgc, googTypingNoiseDetection: false }
+      : { echoCancellation: useEchoAndAgc, noiseSuppression: isRnnoise, autoGainControl: useEchoAndAgc, googTypingNoiseDetection: false };
 
     const videoConstraints = state.selectedVideoDeviceId
       ? { deviceId: { ideal: state.selectedVideoDeviceId }, width: { ideal: 640 }, height: { ideal: 480 } }
@@ -3288,7 +3303,7 @@ function setNoiseGateThreshold(val) {
 function updateNoiseGateIndicator(isPassingVoice, currentAvg, threshold) {
   const badge = document.getElementById('noise-gate-indicator-badge');
   if (!badge) return;
-  if (!state.noiseSuppressionEnabled) {
+  if (state.noiseSuppressionMode === 'none') {
     badge.textContent = 'Filtro Desativado';
     badge.style.background = 'rgba(148, 155, 164, 0.2)';
     badge.style.color = 'var(--text-muted)';
@@ -3955,11 +3970,15 @@ function setupKeyboardShortcuts() {
       });
     }
 
-    // Captura teclas e botões gravados no SO via RawInput (node-global-key-listener)
+    // Captura teclas e botões gravados no SO via uIOhook
     if (typeof window.electronAPI.onGlobalHotkeyRecorded === 'function') {
       window.electronAPI.onGlobalHotkeyRecorded((data) => {
-        if (state.isRecordingHotkey && data && data.key) {
-          finishHotkeyRecording(data.key);
+        if (state.isRecordingHotkey && data) {
+          if (data.key === null || data.key === 'escape') {
+            finishHotkeyRecording(null);
+          } else if (data.key) {
+            finishHotkeyRecording(data.key);
+          }
         }
       });
     }
@@ -4066,7 +4085,8 @@ function setupKeyboardShortcuts() {
 
     if (isInput) return;
 
-    const pressedKey = e.key.toLowerCase();
+    const rawPressed = e.key.toLowerCase();
+    const pressedKey = rawPressed === ' ' ? 'space' : (rawPressed === 'control' ? 'ctrl' : rawPressed);
     const pressedCode = e.code.toLowerCase();
     const isHotkeyMatch = (pressedKey === state.micHotkey || pressedCode === state.micHotkey || pressedCode.replace('key', '') === state.micHotkey || pressedCode.replace('digit', '') === state.micHotkey);
 
@@ -4100,7 +4120,8 @@ function setupKeyboardShortcuts() {
     const isInput = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'SELECT');
     if (isInput) return;
 
-    const releasedKey = e.key.toLowerCase();
+    const rawReleased = e.key.toLowerCase();
+    const releasedKey = rawReleased === ' ' ? 'space' : (rawReleased === 'control' ? 'ctrl' : rawReleased);
     const releasedCode = e.code.toLowerCase();
     const isHotkeyMatch = (releasedKey === state.micHotkey || releasedCode === state.micHotkey || releasedCode.replace('key', '') === state.micHotkey || releasedCode.replace('digit', '') === state.micHotkey);
 
@@ -4124,9 +4145,12 @@ function finishHotkeyRecording(newKey) {
   if (btn) btn.querySelector('span').textContent = 'Alterar Tecla / Botão';
 
   if (newKey) {
-    let cleanKey = newKey.toLowerCase();
-    if (cleanKey.startsWith('key')) cleanKey = cleanKey.replace('key', '');
-    if (cleanKey.startsWith('digit')) cleanKey = cleanKey.replace('digit', '');
+    let cleanKey = String(newKey).toLowerCase();
+    if (cleanKey === ' ' || cleanKey === 'spacebar') cleanKey = 'space';
+    if (cleanKey === 'control') cleanKey = 'ctrl';
+    if (cleanKey === 'esc') cleanKey = 'escape';
+    if (cleanKey.startsWith('key') && cleanKey.length === 4) cleanKey = cleanKey.slice(3);
+    if (cleanKey.startsWith('digit') && cleanKey.length === 6) cleanKey = cleanKey.slice(5);
 
     state.micHotkey = cleanKey;
     StorageService.saveMicHotkey(cleanKey);

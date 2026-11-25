@@ -1,7 +1,7 @@
 {
   "name": "sussurro-rpg",
   "private": true,
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "Sussurro - Aplicativo de chamadas de voz e vídeo em grupo",
   "author": "Hardiscore",
   "repository": {
@@ -45,7 +45,6 @@
     "asar": true,
     "asarUnpack": [
       "**/node_modules/uiohook-napi/**/*",
-      "**/node_modules/node-global-key-listener/**/*",
       "**/node_modules/loopback-capture/**/*",
       "noise-suppressor.js",
       "video-effects.js"
@@ -73,9 +72,16 @@
       "package.json",
       "public/**/*",
       "node_modules/uiohook-napi/**/*",
-      "node_modules/node-global-key-listener/**/*",
+      "!node_modules/uiohook-napi/prebuilds/darwin-*/**",
+      "!node_modules/uiohook-napi/prebuilds/linux-*/**",
+      "!node_modules/uiohook-napi/prebuilds/win32-arm64/**",
+      "!node_modules/uiohook-napi/libuiohook/**",
+      "!node_modules/uiohook-napi/src/**",
       "node_modules/loopback-capture/**/*",
-      "node_modules/@shiguredo/**/*"
+      "!node_modules/loopback-capture/prebuilds/linux-*/**",
+      "!node_modules/loopback-capture/src/**",
+      "node_modules/@shiguredo/**/*",
+      "!public/assets/aistudio/**"
     ],
     "win": {
       "icon": "icon.ico",
@@ -107,7 +113,7 @@
       "displayName": "Sussurro",
       "backgroundColor": "#1e1f22",
       "showNameOnTiles": true,
-      "languages": ["pt-BR", "en-US"],
+      "languages": ["pt-BR"],
       "capabilities": [
         "runFullTrust",
         "internetClient",
@@ -130,7 +136,6 @@
     "firebase": "^12.19.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
-    "node-global-key-listener": "^0.3.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "uiohook-napi": "^1.5.5",

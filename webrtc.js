@@ -210,7 +210,7 @@ export class TavernWebRTC {
     this.highpassFilter = null;
 
     // Versão do Cliente e Compatibilidade Estrita
-    this.appVersion = options.appVersion || '1.1.2';
+    this.appVersion = options.appVersion || '1.2.4';
     this.userInfo.appVersion = this.appVersion;
 
     // Callbacks do UI
@@ -260,6 +260,41 @@ export class TavernWebRTC {
   }
 
   /**
+   * Resolve 'default', 'communications' ou null para o deviceId físico real correspondente,
+   * garantindo o mesmo ganho/volume de captura que ao selecionar o microfone manualmente.
+   */
+  async resolveAudioDeviceId(requestedId) {
+    try {
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.enumerateDevices !== 'function') {
+        return requestedId || null;
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioInputs = devices.filter(d => d.kind === 'audioinput' && d.deviceId);
+      if (audioInputs.length === 0) return requestedId || null;
+
+      if (requestedId && requestedId !== 'default' && requestedId !== 'communications') {
+        if (audioInputs.some(d => d.deviceId === requestedId)) {
+          return requestedId;
+        }
+      }
+
+      const aliasKey = (requestedId === 'communications') ? 'communications' : 'default';
+      const aliasEntry = audioInputs.find(d => d.deviceId === aliasKey) || audioInputs.find(d => d.deviceId === 'default');
+      if (aliasEntry && aliasEntry.groupId) {
+        const physicalMatch = audioInputs.find(
+          d => d.groupId === aliasEntry.groupId && d.deviceId !== 'default' && d.deviceId !== 'communications'
+        );
+        if (physicalMatch) return physicalMatch.deviceId;
+      }
+
+      const firstPhysical = audioInputs.find(d => d.deviceId !== 'default' && d.deviceId !== 'communications');
+      return firstPhysical ? firstPhysical.deviceId : (requestedId || null);
+    } catch (e) {
+      return requestedId || null;
+    }
+  }
+
+  /**
    * Captura a mídia do usuário (Microfone por padrão; câmera desativada ao entrar)
    */
   async startLocalMedia(audioDeviceId = null, videoDeviceId = null, requestVideo = false) {
@@ -272,17 +307,19 @@ export class TavernWebRTC {
       this.localStream = null;
     }
 
-    const useSuppression = this.noiseSuppressionMode !== 'none';
+    const effectiveAudioDeviceId = await this.resolveAudioDeviceId(this.selectedAudioDeviceId);
+    const isRnnoise = this.noiseSuppressionMode === 'rnnoise';
+    const useEchoAndAgc = this.noiseSuppressionMode !== 'none';
     const audioConstraints = {
-      ...(this.selectedAudioDeviceId ? { deviceId: { exact: this.selectedAudioDeviceId } } : {}),
-      echoCancellation: useSuppression,
-      noiseSuppression: useSuppression,
-      autoGainControl: useSuppression,
-      googEchoCancellation: useSuppression,
-      googAutoGainControl: useSuppression,
-      googNoiseSuppression: useSuppression,
-      googHighpassFilter: useSuppression,
-      googTypingNoiseDetection: useSuppression
+      ...(effectiveAudioDeviceId ? { deviceId: { exact: effectiveAudioDeviceId } } : {}),
+      echoCancellation: useEchoAndAgc,
+      noiseSuppression: isRnnoise,
+      autoGainControl: useEchoAndAgc,
+      googEchoCancellation: useEchoAndAgc,
+      googAutoGainControl: useEchoAndAgc,
+      googNoiseSuppression: isRnnoise,
+      googHighpassFilter: useEchoAndAgc,
+      googTypingNoiseDetection: false
     };
 
     let audioStream = null;
@@ -298,9 +335,10 @@ export class TavernWebRTC {
       try {
         audioStream = await navigator.mediaDevices.getUserMedia({
           audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
+            echoCancellation: useEchoAndAgc,
+            noiseSuppression: isRnnoise,
+            autoGainControl: useEchoAndAgc,
+            googTypingNoiseDetection: false
           },
           video: false
         });
@@ -419,10 +457,10 @@ export class TavernWebRTC {
       this.noiseGateGain = this.audioContext.createGain();
       this.noiseGateGain.gain.setValueAtTime(1.0, this.audioContext.currentTime);
 
-      // Analisador pré-gate para medir a voz do microfone com precisão contínua
+      // Analisador pré-gate para medir a voz do microfone com precisão contínua (Float32 sem quantização)
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = 1024;
-      const timeData = new Uint8Array(this.analyser.fftSize);
+      const timeData = new Float32Array(this.analyser.fftSize);
 
       // Destino Web Audio: gera o track de áudio processado que será transmitido via WebRTC aos participantes
       this.audioDestination = this.audioContext.createMediaStreamDestination();
@@ -463,16 +501,15 @@ export class TavernWebRTC {
         }
       }
 
-      // Aplica restrições iniciais do modo selecionado
-      this.setNoiseSuppressionMode(this.noiseSuppressionMode);
-
       let wasSpeaking = false;
+      let gateIsOpen = false;
       let lastSpokeTime = 0;
 
       if (this.audioMeterInterval) clearInterval(this.audioMeterInterval);
 
       this.audioMeterInterval = setInterval(() => {
         if (!this.localStream || this.userInfo.audioMuted) {
+          gateIsOpen = false;
           if (wasSpeaking) {
             wasSpeaking = false;
             this.userInfo.isSpeaking = false;
@@ -486,52 +523,57 @@ export class TavernWebRTC {
           return;
         }
 
-        this.analyser.getByteTimeDomainData(timeData);
+        this.analyser.getFloatTimeDomainData(timeData);
         let sumSquares = 0;
         for (let i = 0; i < timeData.length; i++) {
-          const val = (timeData[i] - 128) / 128; // -1 a 1
+          const val = timeData[i];
           sumSquares += val * val;
         }
         const rms = Math.sqrt(sumSquares / timeData.length);
-        const level = Math.round(rms * 100); // 0 a 100+
+        const level = rms * 100; // Precisão contínua em ponto flutuante (0 a 100+)
 
         const isGateMode = this.noiseSuppressionMode === 'noisegate';
         const isRnnoise = this.noiseSuppressionMode === 'rnnoise';
         const isNone = this.noiseSuppressionMode === 'none';
 
-        // Limiar adaptativo ultra-sensível para vozes baixas e sussurros de RPG
-        let activeThreshold = 3;
+        // Histerese (limiar maior para abrir, bem menor para manter aberto) evita cortar fala longa (>5s)
+        let openThreshold = 1.0;
+        let closeThreshold = 0.45;
+        let hangoverMs = 600;
+
         if (isRnnoise) {
-          // No modo RNNoise, o filtro neural já silencia teclado e ventilador,
-          // permitindo alta sensibilidade para vozes baixas e sussurros
-          activeThreshold = 2.0;
+          // No modo RNNoise, o filtro do navegador já remove ruído de fundo; não empilhar corte duro no gain
+          openThreshold = 1.4;
+          closeThreshold = 0.6;
+          hangoverMs = 650;
         } else if (isGateMode) {
-          activeThreshold = Math.max(2.5, Math.min(this.noiseGateThreshold, 7));
-        } else {
-          activeThreshold = 1.5;
+          openThreshold = 0.6 + (this.noiseGateThreshold * 0.12);
+          closeThreshold = Math.max(0.35, openThreshold * 0.42);
+          hangoverMs = 850;
         }
 
-        const isSpeaking = level >= activeThreshold;
+        const now = Date.now();
+        const activeThreshold = gateIsOpen ? closeThreshold : openThreshold;
 
-        if (isSpeaking) {
-          lastSpokeTime = Date.now();
+        if (level >= activeThreshold) {
+          lastSpokeTime = now;
+          gateIsOpen = true;
+        } else if (now - lastSpokeTime >= hangoverMs) {
+          gateIsOpen = false;
         }
 
-        // Hangover de 380ms: mantém o portão e a borda verde ativos durante pausas naturais sem piscar
-        const hangoverMs = 380;
-        const gateIsOpen = isNone || (Date.now() - lastSpokeTime < hangoverMs);
+        const voiceActive = isNone ? (level >= openThreshold || now - lastSpokeTime < 500) : gateIsOpen;
 
-        // Aplica corte de ruído real na saída do áudio transmitido aos outros jogadores
         if (this.audioContext && this.noiseGateGain) {
-          if (isNone) {
+          if (isNone || isRnnoise) {
+            // Sem portão de corte duro em 'none' ou 'rnnoise' para nunca picotar falas longas
             this.noiseGateGain.gain.setTargetAtTime(1.0, this.audioContext.currentTime, 0.01);
           } else if (gateIsOpen) {
-            // Ataque ultra-rápido (6ms) para não cortar a primeira letra/sílaba da fala baixa
-            this.noiseGateGain.gain.setTargetAtTime(1.0, this.audioContext.currentTime, 0.006);
+            // Ataque rápido (5ms) para preservar sílabas iniciais
+            this.noiseGateGain.gain.setTargetAtTime(1.0, this.audioContext.currentTime, 0.005);
           } else {
-            // Liberação suave para silêncio completo quando parar de falar
-            const floorGain = isRnnoise ? 0.0 : 0.005;
-            this.noiseGateGain.gain.setTargetAtTime(floorGain, this.audioContext.currentTime, 0.06);
+            // Atenuação suave para silêncio após pausas maiores (>850ms)
+            this.noiseGateGain.gain.setTargetAtTime(0.03, this.audioContext.currentTime, 0.12);
           }
         }
 
@@ -539,13 +581,13 @@ export class TavernWebRTC {
           this.processedAudioTrack.enabled = !this.userInfo.audioMuted;
         }
 
-        this.onNoiseGateState(gateIsOpen, level, activeThreshold);
+        this.onNoiseGateState(isGateMode ? gateIsOpen : true, Math.round(level), openThreshold);
 
-        if (gateIsOpen !== wasSpeaking) {
-          wasSpeaking = gateIsOpen;
-          this.userInfo.isSpeaking = gateIsOpen;
+        if (voiceActive !== wasSpeaking) {
+          wasSpeaking = voiceActive;
+          this.userInfo.isSpeaking = voiceActive;
           this.broadcastMetadata();
-          this.onSpeakingState('local', gateIsOpen, level);
+          this.onSpeakingState('local', voiceActive, Math.round(level));
         }
       }, 50);
     } catch (err) {
@@ -560,19 +602,25 @@ export class TavernWebRTC {
     this.noiseSuppressionMode = mode;
     const isRnnoise = mode === 'rnnoise';
     const isGate = mode === 'noisegate';
-    const audioTrack = this.localStream?.getAudioTracks()[0];
-    if (audioTrack) {
-      audioTrack.applyConstraints({
-        // RNNoise ativa cancelamento profundo do browser; Noise Gate deixa áudio livre para sussurros e efeitos
+    const useEchoAndAgc = mode !== 'none';
+
+    if (this.highpassFilter && this.audioContext) {
+      this.highpassFilter.frequency.setValueAtTime(mode === 'none' ? 10 : 75, this.audioContext.currentTime);
+    }
+
+    // Aplica constraints na trilha crua do hardware (rawAudioTrack), nunca na trilha processada do Web Audio
+    const hardwareTrack = this.rawAudioTrack || this.localStream?.getAudioTracks()[0];
+    if (hardwareTrack && typeof hardwareTrack.applyConstraints === 'function') {
+      hardwareTrack.applyConstraints({
         noiseSuppression: isRnnoise,
-        echoCancellation: mode !== 'none',
-        autoGainControl: mode !== 'none',
+        echoCancellation: useEchoAndAgc,
+        autoGainControl: useEchoAndAgc,
         googNoiseSuppression: isRnnoise,
-        googHighpassFilter: isRnnoise || isGate
+        googEchoCancellation: useEchoAndAgc,
+        googAutoGainControl: useEchoAndAgc,
+        googHighpassFilter: isRnnoise || isGate,
+        googTypingNoiseDetection: false
       }).catch(() => {});
-      if (!this.userInfo.audioMuted) {
-        audioTrack.enabled = true;
-      }
     }
     if (this.noiseWorkletNode) {
       try {
@@ -595,19 +643,21 @@ export class TavernWebRTC {
    */
   async switchAudioDevice(deviceId) {
     this.selectedAudioDeviceId = deviceId;
-    const useSuppression = this.noiseSuppressionMode !== 'none';
+    const effectiveDeviceId = await this.resolveAudioDeviceId(deviceId);
+    const isRnnoise = this.noiseSuppressionMode === 'rnnoise';
+    const useEchoAndAgc = this.noiseSuppressionMode !== 'none';
     try {
       const newStream = await navigator.mediaDevices.getUserMedia({
         audio: {
-          deviceId: { exact: deviceId },
-          echoCancellation: useSuppression,
-          noiseSuppression: this.noiseSuppressionMode === 'rnnoise',
-          autoGainControl: useSuppression,
-          googEchoCancellation: useSuppression,
-          googAutoGainControl: useSuppression,
-          googNoiseSuppression: this.noiseSuppressionMode === 'rnnoise',
-          googHighpassFilter: useSuppression,
-          googTypingNoiseDetection: useSuppression
+          ...(effectiveDeviceId ? { deviceId: { exact: effectiveDeviceId } } : {}),
+          echoCancellation: useEchoAndAgc,
+          noiseSuppression: isRnnoise,
+          autoGainControl: useEchoAndAgc,
+          googEchoCancellation: useEchoAndAgc,
+          googAutoGainControl: useEchoAndAgc,
+          googNoiseSuppression: isRnnoise,
+          googHighpassFilter: useEchoAndAgc,
+          googTypingNoiseDetection: false
         }
       });
       const newTrack = newStream.getAudioTracks()[0];
