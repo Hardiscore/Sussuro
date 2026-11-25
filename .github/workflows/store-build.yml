@@ -1,0 +1,29 @@
+name: Build Microsoft Store (MSIX / AppX)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-store-package:
+    runs-on: windows-latest
+    steps:
+      - name: Baixar Código do Repositório
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar Dependências
+        run: npm install
+
+      - name: Gerar Pacote Microsoft Store (.appx)
+        run: npm run build:store
+
+      - name: Enviar Pacote .appx como Artefato
+        uses: actions/upload-artifact@v4
+        with:
+          name: sussurro-microsoft-store-appx
+          path: release/*.appx
+          if-no-files-found: error

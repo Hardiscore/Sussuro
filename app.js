@@ -359,7 +359,7 @@ const StorageService = {
 const MAX_PARTICIPANTS = 15;
 
 // Versão Oficial do Sussurro RPG
-export const APP_VERSION = '1.2.2';
+export const APP_VERSION = '1.2.3';
 
 const savedPrefs = StorageService.getAllPreferences();
 
@@ -1078,7 +1078,16 @@ async function fetchActiveRoomsFromFirebase() {
             if (pRes.ok) {
               const peersData = await pRes.json();
               if (peersData && typeof peersData === 'object') {
-                const peerIds = Object.keys(peersData);
+                const now = Date.now();
+                const peerIds = Object.keys(peersData).filter(pid => {
+                  const p = peersData[pid];
+                  if (!p) return false;
+                  // Se o peer usa heartbeat e não atualizou há mais de 2 minutos, caiu sem sair
+                  if (typeof p.hb === 'number' && p.updatedAt && (now - p.updatedAt > 120000)) {
+                    return false;
+                  }
+                  return true;
+                });
                 // Observadores não contam como pessoas na mesa; sala só com observadores não aparece
                 const observerCount = peerIds.filter(pid => peersData[pid]?.observer).length;
                 const playerIds = peerIds.filter(pid => !peersData[pid]?.observer);
@@ -1613,13 +1622,16 @@ async function startCall(roomId, options = {}) {
   document.getElementById('call-room-title').textContent = roomId;
   state.isInCall = true;
 
-  // Garante que o AudioContext do navegador não esteja em estado suspenso
+  // Garante que o AudioContext do navegador não esteja em estado suspenso (e fecha o contexto temporário para não vazar)
   try {
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     if (AudioCtx) {
       const dummyCtx = new AudioCtx();
+      const closeDummy = () => dummyCtx.close().catch(() => {});
       if (dummyCtx.state === 'suspended') {
-        dummyCtx.resume().catch(() => {});
+        dummyCtx.resume().catch(() => {}).finally(closeDummy);
+      } else {
+        closeDummy();
       }
     }
   } catch (e) {}
@@ -2116,11 +2128,23 @@ function reattachPeerAudio(peerId, stream) {
   if (!audio || !stream) return;
   audio.srcObject = null;
   audio.srcObject = stream;
+  audio._boundAudioTrackId = stream.getAudioTracks ? (stream.getAudioTracks()[0]?.id || null) : null;
   const vol = state.peerVolumes[peerId] !== undefined ? state.peerVolumes[peerId] : 100;
   const isMuted = (vol === 0 || !!state.localStreamMutes[peerId]);
   audio.muted = isMuted;
   audio.volume = isMuted ? 0 : Math.min(1.0, vol / 100);
-  audio.play().catch(() => {});
+  const p = audio.play();
+  if (p !== undefined) {
+    p.catch(() => {
+      const unlock = () => {
+        audio.play().catch(() => {});
+        window.removeEventListener('click', unlock);
+        window.removeEventListener('keydown', unlock);
+      };
+      window.addEventListener('click', unlock, { once: true });
+      window.addEventListener('keydown', unlock, { once: true });
+    });
+  }
 }
 
 // Sussurro: voz de um observador só para este jogador (sem tile no grid)
@@ -2352,8 +2376,13 @@ function addOrUpdatePeerTile(peerId, peerInfo, stream) {
     video.play().catch(() => {});
   }
   if (audio) {
-    if (audio.srcObject !== stream) {
+    const primaryAudioTrackId = stream && stream.getAudioTracks ? (stream.getAudioTracks()[0]?.id || null) : null;
+    if (audio.srcObject !== stream || audio._boundAudioTrackId !== primaryAudioTrackId) {
+      if (audio.srcObject === stream) {
+        audio.srcObject = null;
+      }
       audio.srcObject = stream;
+      audio._boundAudioTrackId = primaryAudioTrackId;
     }
     const isMuted = (currentVol === 0 || !!state.localStreamMutes[peerId]);
     audio.muted = isMuted;
@@ -5620,6 +5649,7 @@ function setupVersionSettingsTab(modal) {
 
   const isElectronApp = !!(window.electronAPI && window.electronAPI.isElectron);
   let currentAppVersion = APP_VERSION;
+  let isWindowsStoreApp = false;
   if (versionPill) versionPill.textContent = `v${currentAppVersion}`;
   if (versionText) versionText.innerHTML = `Versão atual: <strong>v${currentAppVersion}</strong>`;
 
@@ -5628,9 +5658,14 @@ function setupVersionSettingsTab(modal) {
     window.electronAPI.getAppVersion().then(info => {
       if (info && info.version) {
         currentAppVersion = info.version;
+        isWindowsStoreApp = !!info.isWindowsStore;
         if (versionPill) versionPill.textContent = `v${info.version}`;
         if (versionText) versionText.innerHTML = `Versão instalada: <strong>v${info.version}</strong>`;
-        if (envText) envText.textContent = info.isPackaged ? 'Desktop Oficial (Electron Windows)' : 'Modo Desenvolvimento (Electron)';
+        if (envText) {
+          envText.textContent = isWindowsStoreApp
+            ? 'Microsoft Store (Windows)'
+            : (info.isPackaged ? 'Desktop Oficial (Electron Windows)' : 'Modo Desenvolvimento (Electron)');
+        }
       }
     }).catch(() => {});
   } else {
@@ -5734,6 +5769,14 @@ function setupVersionSettingsTab(modal) {
       }
 
       // --- MODO DESKTOP ELECTRON ---
+      if (isWindowsStoreApp) {
+        setFeedback('🛍️', `Versão instalada via <strong>Microsoft Store (v${currentAppVersion})</strong>. As atualizações são baixadas e aplicadas automaticamente pela própria Microsoft Store.`, 'info');
+        setTimeout(() => {
+          if (btnCheckText) btnCheckText.textContent = 'procurar update';
+          btnCheckUpdate.disabled = false;
+        }, 500);
+        return;
+      }
       try {
         updaterState = 'checking';
         updaterError = null;
@@ -5866,6 +5909,11 @@ function setupVersionSettingsTab(modal) {
           updaterState = 'missing';
           updaterError = info.error || null;
           showUpdaterOutcome();
+          return;
+        }
+        if (info && info.reason === 'windows-store') {
+          updaterState = 'not-available';
+          setFeedback('🛍️', `Versão instalada via <strong>Microsoft Store (v${currentAppVersion})</strong>. As atualizações são gerenciadas pela própria Loja.`, 'info');
           return;
         }
         if (info && info.reason === 'dev') {
@@ -6758,4 +6806,13 @@ if (document.readyState === 'loading') {
 } else {
   setupWelcomeScreen();
 }
+
+// Garante limpeza de presença na chamada ao recarregar/fechar janela ou aba
+const handleWindowExitCleanup = () => {
+  if (state.isInCall && state.webrtc && typeof state.webrtc.sendUnloadCleanup === 'function') {
+    state.webrtc.sendUnloadCleanup();
+  }
+};
+window.addEventListener('pagehide', handleWindowExitCleanup);
+window.addEventListener('beforeunload', handleWindowExitCleanup);
 

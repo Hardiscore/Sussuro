@@ -60,7 +60,7 @@ export default defineConfig(() => {
           clientsClaim: true,
           cleanupOutdatedCaches: true,
           globPatterns: ['**/*.{ico,png,svg,woff,woff2,wasm}'],
-          navigateFallbackDenylist: [/^\/api\//],
+          navigateFallbackDenylist: [/^\/api\//, /^\/privacidade/],
           runtimeCaching: [
             {
               urlPattern: ({request}) =>

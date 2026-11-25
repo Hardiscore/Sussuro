@@ -1,7 +1,6 @@
 import express, { type Request, type Response } from "express";
 import path from "path";
 import fs from "fs";
-import { createServer as createViteServer } from "vite";
 
 interface PeerInfo {
   id: string;
@@ -272,7 +271,7 @@ async function startServer() {
         if (data && data.version) return String(data.version).trim();
       }
     } catch (e) {}
-    return "1.2.2";
+    return "1.2.3";
   }
 
   // API de Saúde e Versão (Usada pelo Auto-Updater do PWA)
@@ -558,8 +557,20 @@ async function startServer() {
     }
   }, 10000);
 
+  // Página pública de Política de Privacidade (necessária para Microsoft Store e PWA)
+  app.get(["/privacidade", "/privacidade/"], (_req: Request, res: Response) => {
+    const prodFile = path.join(process.cwd(), "dist", "privacidade", "index.html");
+    const devFile = path.join(process.cwd(), "public", "privacidade", "index.html");
+    const targetFile = (process.env.NODE_ENV === "production" && fs.existsSync(prodFile)) ? prodFile : devFile;
+    if (fs.existsSync(targetFile)) {
+      return res.sendFile(targetFile);
+    }
+    return res.status(404).send("Página de privacidade não encontrada.");
+  });
+
   // Vite middleware para desenvolvimento / estático para produção
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: false },
       appType: "spa",

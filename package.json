@@ -1,7 +1,7 @@
 {
   "name": "sussurro-rpg",
   "private": true,
-  "version": "1.2.2",
+  "version": "1.2.3",
   "description": "Sussurro - Aplicativo de chamadas de voz e vídeo em grupo",
   "author": "Hardiscore",
   "repository": {
@@ -9,18 +9,22 @@
     "url": "https://github.com/Hardiscore/Sussuro.git"
   },
   "homepage": "https://github.com/Hardiscore/Sussuro#readme",
-  "main": "main.cjs",
+  "main": "server.ts",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node server.ts",
     "preview": "vite preview",
-    "electron": "electron .",
-    "electron:dev": "electron .",
+    "electron": "electron main.cjs",
+    "electron:dev": "electron main.cjs",
     "clean": "rm -rf dist server.js release",
     "lint": "tsc --noEmit",
     "build:electron": "electron-builder --win",
+    "build:store": "electron-builder --win appx --x64 -p never",
     "dist": "electron-builder --win --x64",
     "dist:publish": "electron-builder --win --x64 -p always"
   },
@@ -44,7 +48,8 @@
       "video-effects.js"
     ],
     "directories": {
-      "output": "release"
+      "output": "release",
+      "buildResources": "build"
     },
     "files": [
       "main.cjs",
@@ -90,6 +95,23 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Sussurro RPG",
       "runAfterFinish": true
+    },
+    "appx": {
+      "applicationId": "SussurroRPG",
+      "identityName": "Hardiscore.Sussurro",
+      "publisher": "CN=A3982E2B-88CF-4BE3-B541-5CB798E9583B",
+      "publisherDisplayName": "Hardiscore",
+      "displayName": "Sussurro",
+      "backgroundColor": "#1e1f22",
+      "showNameOnTiles": true,
+      "languages": ["pt-BR", "en-US"],
+      "capabilities": [
+        "runFullTrust",
+        "internetClient",
+        "privateNetworkClientServer",
+        "microphone",
+        "webcam"
+      ]
     }
   },
   "dependencies": {

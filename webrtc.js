@@ -16,16 +16,51 @@ import {
   onChildRemoved, 
   remove, 
   get,
-  onDisconnect 
+  onDisconnect,
+  getStoredFirebaseConfig,
+  BUILTIN_FIREBASE_CONFIG
 } from './firebase-config.js';
 
 const STORAGE_KEY_ICE = 'tavern_rtc_ice_servers';
+const STORAGE_KEY_ACTIVE_TABS = 'sussurro_active_tabs';
+
+function getLocalTabId() {
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      let id = window.sessionStorage.getItem('tavern_tab_id');
+      if (!id) {
+        id = 'tab_' + Math.random().toString(36).substring(2, 10) + '_' + Date.now();
+        window.sessionStorage.setItem('tavern_tab_id', id);
+      }
+      return id;
+    }
+  } catch (e) {}
+  return 'tab_' + Math.random().toString(36).substring(2, 10);
+}
+
+function replaceStreamTrackByKind(stream, newTrack) {
+  if (!stream || !newTrack) return false;
+  let replaced = false;
+  for (const existing of stream.getTracks()) {
+    if (existing.kind === newTrack.kind && existing !== newTrack) {
+      try { stream.removeTrack(existing); } catch (e) {}
+      try { existing.stop(); } catch (e) {}
+      replaced = true;
+    }
+  }
+  if (!stream.getTracks().includes(newTrack)) {
+    stream.addTrack(newTrack);
+  }
+  return replaced;
+}
 
 // Configuração padrão de ICE Servers (STUN gratuito do Google)
 export const DEFAULT_ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' }
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' }
 ];
 
 /**
@@ -151,7 +186,7 @@ export class TavernWebRTC {
     this.rawVideoTrack = null;
     this.rawVideoStream = null;
 
-    // Sinalização
+    // Sinalização e ciclo de vida
     this.firebaseDb = null;
     this.isFirebaseMode = false;
     this.isServerSignalingMode = false;
@@ -159,6 +194,15 @@ export class TavernWebRTC {
     this.broadcastChannel = null;
     this.signalingCleanups = [];
     this.hasAudioDevice = true;
+    this._signalSeq = 0;
+    this._hbSeq = 0;
+    this._leftRoom = false;
+    this._tabId = getLocalTabId();
+    this.peerQueues = new Map();
+    this.peerLocalHeartbeats = new Map();
+    this.heartbeatInterval = null;
+    this.pruneInterval = null;
+    this.localTabInterval = null;
 
     // Supressão de ruído (RNNoise / Noise Gate / Nenhum)
     this.noiseSuppressionMode = options.noiseSuppressionMode || 'rnnoise';
@@ -404,10 +448,14 @@ export class TavernWebRTC {
         }
 
         // Atualiza a faixa nos peer senders WebRTC já conectados
-        for (const [peerId, peer] of this.peers.entries()) {
-          if (peer.connection) {
+        for (const [, peer] of this.peers.entries()) {
+          if (peer.connection && peer.connection.connectionState !== 'closed') {
             const senders = peer.connection.getSenders();
-            const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+            let audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+            if (!audioSender) {
+              const audioTr = this.findAudioTransceiver(peer.connection);
+              if (audioTr) audioSender = audioTr.sender;
+            }
             if (audioSender) {
               audioSender.replaceTrack(this.processedAudioTrack).catch(e => console.warn('[WebRTC] Erro ao substituir track no sender:', e));
             }
@@ -547,40 +595,58 @@ export class TavernWebRTC {
    */
   async switchAudioDevice(deviceId) {
     this.selectedAudioDeviceId = deviceId;
+    const useSuppression = this.noiseSuppressionMode !== 'none';
     try {
       const newStream = await navigator.mediaDevices.getUserMedia({
         audio: {
           deviceId: { exact: deviceId },
-          echoCancellation: this.noiseSuppressionEnabled,
-          noiseSuppression: this.noiseSuppressionEnabled,
-          autoGainControl: this.noiseSuppressionEnabled,
-          googEchoCancellation: this.noiseSuppressionEnabled,
-          googAutoGainControl: this.noiseSuppressionEnabled,
-          googNoiseSuppression: this.noiseSuppressionEnabled,
-          googHighpassFilter: this.noiseSuppressionEnabled,
-          googTypingNoiseDetection: this.noiseSuppressionEnabled
+          echoCancellation: useSuppression,
+          noiseSuppression: this.noiseSuppressionMode === 'rnnoise',
+          autoGainControl: useSuppression,
+          googEchoCancellation: useSuppression,
+          googAutoGainControl: useSuppression,
+          googNoiseSuppression: this.noiseSuppressionMode === 'rnnoise',
+          googHighpassFilter: useSuppression,
+          googTypingNoiseDetection: useSuppression
         }
       });
       const newTrack = newStream.getAudioTracks()[0];
       newTrack.enabled = !this.userInfo.audioMuted;
+      this.hasAudioDevice = true;
+      this.userInfo.noAudioDevice = false;
 
-      // Substitui a faixa nos peer senders
-      for (const [peerId, peer] of this.peers.entries()) {
-        const senders = peer.connection.getSenders();
-        const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
-        if (audioSender) {
-          await audioSender.replaceTrack(newTrack);
-        }
+      if (!this.localStream) {
+        this.localStream = new MediaStream();
       }
 
-      // Substitui na stream local
+      // Substitui na stream local e inicia analisador (que já atualiza os senders com processedAudioTrack)
       const oldTrack = this.localStream.getAudioTracks()[0];
       if (oldTrack) {
         this.localStream.removeTrack(oldTrack);
-        oldTrack.stop();
+        try { oldTrack.stop(); } catch (e) {}
+      }
+      if (this.rawAudioTrack && this.rawAudioTrack !== oldTrack) {
+        try { this.rawAudioTrack.stop(); } catch (e) {}
       }
       this.localStream.addTrack(newTrack);
+      this.processedAudioTrack = null;
       this.setupAudioAnalyser(this.localStream);
+
+      // Fallback se Web Audio API não criou processedAudioTrack
+      if (!this.processedAudioTrack) {
+        for (const [, peer] of this.peers.entries()) {
+          if (!peer.connection || peer.connection.connectionState === 'closed') continue;
+          const senders = peer.connection.getSenders();
+          let audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+          if (!audioSender) {
+            const audioTr = this.findAudioTransceiver(peer.connection);
+            if (audioTr) audioSender = audioTr.sender;
+          }
+          if (audioSender) {
+            await audioSender.replaceTrack(newTrack).catch(() => {});
+          }
+        }
+      }
       console.log('[WebRTC] Microfone alterado com sucesso:', deviceId);
       return true;
     } catch (err) {
@@ -743,43 +809,54 @@ export class TavernWebRTC {
         if (this.rawVideoTrack) this.rawVideoTrack.enabled = true;
         this.userInfo.videoOff = false;
 
-        // Anexa ou substitui a faixa de vídeo em todas as conexões P2P e renegocia
-        for (const [peerId, peer] of this.peers.entries()) {
-          const pc = peer.connection;
-          const senders = pc.getSenders();
-          let videoSender = senders.find(s => s.track && s.track.kind === 'video');
+        // Anexa ou substitui a faixa de vídeo em todas as conexões P2P e renegocia de forma serializada por peer
+        await Promise.all(Array.from(this.peers.keys()).map(peerId =>
+          this.enqueuePeerSignaling(peerId, async () => {
+            const peer = this.peers.get(peerId);
+            if (!peer || !peer.connection || peer.connection.connectionState === 'closed' || this._leftRoom) return;
+            const pc = peer.connection;
+            const senders = pc.getSenders();
+            let videoSender = senders.find(s => s.track && s.track.kind === 'video');
 
-          if (!videoSender) {
-            const transceivers = pc.getTransceivers();
-            const vt = transceivers.find(t => (t.sender && (!t.sender.track || t.sender.track.kind === 'video')) || (t.receiver && t.receiver.track && t.receiver.track.kind === 'video'));
-            if (vt && vt.sender) {
-              await vt.sender.replaceTrack(videoTrack);
-              vt.direction = 'sendrecv';
-              videoSender = vt.sender;
-            } else {
-              try {
-                videoSender = pc.addTrack(videoTrack, this.localStream);
-              } catch (e) {
-                console.warn('[WebRTC] Erro ao adicionar faixa de vídeo à conexão:', e);
+            if (!videoSender) {
+              const transceivers = pc.getTransceivers();
+              const vt = transceivers.find(t => (t.sender && (!t.sender.track || t.sender.track.kind === 'video')) || (t.receiver && t.receiver.track && t.receiver.track.kind === 'video'));
+              if (vt && vt.sender) {
+                await vt.sender.replaceTrack(videoTrack);
+                vt.direction = 'sendrecv';
+                videoSender = vt.sender;
+              } else {
+                try {
+                  videoSender = pc.addTrack(videoTrack, this.localStream);
+                } catch (e) {
+                  console.warn('[WebRTC] Erro ao adicionar faixa de vídeo à conexão:', e);
+                }
               }
+            } else {
+              await videoSender.replaceTrack(videoTrack);
             }
-          } else {
-            await videoSender.replaceTrack(videoTrack);
-          }
 
-          try {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            await this.sendSignal(peerId, {
-              type: 'offer',
-              isCamToggle: true,
-              videoOff: false,
-              sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
-            });
-          } catch (renegErr) {
-            console.warn('[WebRTC] Erro ao renegociar offer de vídeo:', renegErr);
-          }
-        }
+            if (pc.signalingState !== 'stable') {
+              setTimeout(() => this.retryNegotiation(peerId, 'cam-toggle', false), 600);
+              return;
+            }
+            peer.makingOffer = true;
+            try {
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              await this.sendSignal(peerId, {
+                type: 'offer',
+                isCamToggle: true,
+                videoOff: false,
+                sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
+              });
+            } catch (renegErr) {
+              console.warn('[WebRTC] Erro ao renegociar offer de vídeo:', renegErr);
+            } finally {
+              peer.makingOffer = false;
+            }
+          })
+        ));
       }
     } else {
       // Desligar câmera
@@ -1002,31 +1079,43 @@ export class TavernWebRTC {
       this.broadcastMetadata();
 
       // 2. Adiciona faixas de tela aos peers conectados e renegocia com identificação explícita
-      for (const [peerId, peer] of this.peers.entries()) {
-        if (peer.connection) {
+      await Promise.all(Array.from(this.peers.keys()).map(peerId =>
+        this.enqueuePeerSignaling(peerId, async () => {
+          const peer = this.peers.get(peerId);
+          if (!peer || !peer.connection || peer.connection.connectionState === 'closed' || this._leftRoom) return;
+          const pc = peer.connection;
           try {
-            const senders = peer.connection.getSenders();
+            const senders = pc.getSenders();
             if (!senders.some(s => s.track && s.track.id === screenVideoTrack.id)) {
-              peer.connection.addTrack(screenVideoTrack, this.screenStream);
+              pc.addTrack(screenVideoTrack, this.screenStream);
             }
             if (screenAudioTrack && !senders.some(s => s.track && s.track.id === screenAudioTrack.id)) {
-              peer.connection.addTrack(screenAudioTrack, this.screenStream);
+              pc.addTrack(screenAudioTrack, this.screenStream);
             }
-            const offer = await peer.connection.createOffer();
-            await peer.connection.setLocalDescription(offer);
-            await this.sendSignal(peerId, {
-              type: 'offer',
-              isScreenShareOffer: true,
-              screenStreamId: stream.id,
-              screenTrackId: screenVideoTrack.id,
-              hasScreenAudio: !!screenAudioTrack,
-              sdp: { type: peer.connection.localDescription.type, sdp: peer.connection.localDescription.sdp }
-            });
+            if (pc.signalingState !== 'stable') {
+              setTimeout(() => this.retryNegotiation(peerId, 'screen-start', false), 600);
+              return;
+            }
+            peer.makingOffer = true;
+            try {
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              await this.sendSignal(peerId, {
+                type: 'offer',
+                isScreenShareOffer: true,
+                screenStreamId: stream.id,
+                screenTrackId: screenVideoTrack.id,
+                hasScreenAudio: !!screenAudioTrack,
+                sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
+              });
+            } finally {
+              peer.makingOffer = false;
+            }
           } catch (renegErr) {
             console.warn('[WebRTC] Erro ao adicionar faixas/renegociar tela:', renegErr);
           }
-        }
-      }
+        })
+      ));
 
       if (typeof this.onLocalScreenStreamReady === 'function') {
         this.onLocalScreenStreamReady(this.screenStream);
@@ -1164,33 +1253,43 @@ export class TavernWebRTC {
     // 2. Encerra faixas da tela local e remove dos RTCPeerConnections
     if (this.screenStream) {
       const screenTracks = this.screenStream.getTracks();
-      for (const [peerId, peer] of this.peers.entries()) {
-        if (peer.connection) {
-          const senders = peer.connection.getSenders();
+      await Promise.all(Array.from(this.peers.keys()).map(peerId =>
+        this.enqueuePeerSignaling(peerId, async () => {
+          const peer = this.peers.get(peerId);
+          if (!peer || !peer.connection || peer.connection.connectionState === 'closed' || this._leftRoom) return;
+          const pc = peer.connection;
+          const senders = pc.getSenders();
           let removedAny = false;
           for (const track of screenTracks) {
             const sender = senders.find(s => s.track === track);
             if (sender) {
               try {
-                peer.connection.removeTrack(sender);
+                pc.removeTrack(sender);
                 removedAny = true;
               } catch (e) {}
             }
           }
           if (removedAny) {
+            if (pc.signalingState !== 'stable') {
+              setTimeout(() => this.retryNegotiation(peerId, 'screen-stop', false), 600);
+              return;
+            }
+            peer.makingOffer = true;
             try {
-              const offer = await peer.connection.createOffer();
-              await peer.connection.setLocalDescription(offer);
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
               await this.sendSignal(peerId, {
                 type: 'offer',
-                sdp: { type: peer.connection.localDescription.type, sdp: peer.connection.localDescription.sdp }
+                sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
               });
             } catch (renegErr) {
               console.warn('[WebRTC] Erro ao renegociar offer após parar tela:', renegErr);
+            } finally {
+              peer.makingOffer = false;
             }
           }
-        }
-      }
+        })
+      ));
       screenTracks.forEach(t => t.stop());
       this.screenStream = null;
     }
@@ -1219,6 +1318,7 @@ export class TavernWebRTC {
    * Conecta a uma sala de RPG (inicia sinalização)
    */
   async joinRoom(roomId, userInfo = {}) {
+    this._leftRoom = false;
     this.roomId = roomId.trim().toLowerCase().replace(/[\.#$\[\]\/]/g, '-').replace(/\s+/g, '-');
     this.userInfo = { ...this.userInfo, ...userInfo };
 
@@ -1421,8 +1521,10 @@ export class TavernWebRTC {
    * Configuração de Sinalização via Firebase Realtime Database
    */
   async setupFirebaseSignaling() {
-    const roomRef = ref(this.firebaseDb, `rooms/${this.roomId}`);
     const myPeerRef = ref(this.firebaseDb, `rooms/${this.roomId}/peers/${this.myPeerId}`);
+
+    // Limpa imediatamente registros fantasmas de abas/janelas anteriores deste mesmo dispositivo que travaram/fecharam
+    await this.cleanupCrashedLocalTabs();
 
     // Se a sala está vazia, apaga chat antigo que possa ter sobrado (ex.: último participante caiu sem sair direito)
     try {
@@ -1434,8 +1536,10 @@ export class TavernWebRTC {
     } catch (e) {}
 
     // Registra presença local
-    this.userInfo.joinedAt = Date.now();
-    await set(myPeerRef, {
+    const now = Date.now();
+    this.userInfo.joinedAt = now;
+    this._hbSeq = 1;
+    await set(myPeerRef, removeUndefined({
       id: this.myPeerId,
       name: this.userInfo.name,
       role: this.userInfo.role,
@@ -1443,8 +1547,10 @@ export class TavernWebRTC {
       videoOff: this.userInfo.videoOff,
       appVersion: this.appVersion,
       observer: !!this.userInfo.observer,
-      joinedAt: this.userInfo.joinedAt
-    });
+      joinedAt: this.userInfo.joinedAt,
+      updatedAt: now,
+      hb: this._hbSeq
+    }));
 
     // Remove do banco ao desconectar
     onDisconnect(myPeerRef).remove();
@@ -1452,12 +1558,16 @@ export class TavernWebRTC {
     // Também limpa a caixa de sinais deste peer para não deixar a sala "fantasma" no Firebase
     try { onDisconnect(ref(this.firebaseDb, `rooms/${this.roomId}/signals/${this.myPeerId}`)).remove(); } catch (e) {}
 
+    // Mantém presença local e heartbeat no Firebase para detectar quedas/travamentos rapidamente
+    this.startFirebasePresenceMaintenance();
+
     // Escuta novos peers na sala
     const peersRef = ref(this.firebaseDb, `rooms/${this.roomId}/peers`);
     const unsubscribePeers = onChildAdded(peersRef, (snapshot) => {
       const peerData = snapshot.val();
       if (peerData && peerData.id !== this.myPeerId) {
         this.roomRoster.set(peerData.id, peerData);
+        this.peerLocalHeartbeats.set(peerData.id, { hb: peerData.hb, localAt: Date.now() });
         this.scheduleObserverCapacityCheck();
         this.handlePeerDiscovered(peerData.id, peerData);
       }
@@ -1467,15 +1577,25 @@ export class TavernWebRTC {
       const peerData = snapshot.val();
       if (peerData && peerData.id !== this.myPeerId) {
         this.roomRoster.set(peerData.id, peerData);
+        const prev = this.peerLocalHeartbeats.get(peerData.id);
+        if (!prev || peerData.hb !== prev.hb || peerData.updatedAt !== prev.updatedAt) {
+          this.peerLocalHeartbeats.set(peerData.id, {
+            hb: peerData.hb,
+            updatedAt: peerData.updatedAt,
+            localAt: Date.now()
+          });
+        }
         this.handlePeerMetaReceived(peerData.id, peerData);
       }
     });
 
     const unsubscribePeerRemoved = onChildRemoved(peersRef, (snapshot) => {
       const peerData = snapshot.val();
-      if (peerData && peerData.id !== this.myPeerId) {
-        this.roomRoster.delete(peerData.id);
-        this.closePeer(peerData.id);
+      const removedId = (peerData && peerData.id) || snapshot.key;
+      if (removedId && removedId !== this.myPeerId) {
+        this.roomRoster.delete(removedId);
+        this.peerLocalHeartbeats.delete(removedId);
+        this.closePeer(removedId);
       }
     });
 
@@ -1488,39 +1608,45 @@ export class TavernWebRTC {
         await this.handleIncomingSignal(signal);
         // Remove sinal processado para não acumular
         const signalItemRef = ref(this.firebaseDb, `rooms/${this.roomId}/signals/${this.myPeerId}/${signalKey}`);
-        remove(signalItemRef);
+        remove(signalItemRef).catch(() => {});
       }
     });
 
+    const roomIdSnapshot = this.roomId;
+    const dbSnapshot = this.firebaseDb;
+    const myPeerIdSnapshot = this.myPeerId;
+
     this.signalingCleanups.push(() => {
+      this.stopFirebasePresenceMaintenance();
+      this.clearLocalActiveTab();
       unsubscribePeers();
       unsubscribePeerChanged();
       unsubscribePeerRemoved();
       unsubscribeSignals();
-      const roomId = this.roomId;
-      const db = this.firebaseDb;
       Promise.resolve(remove(myPeerRef))
-        .then(() => remove(ref(db, `rooms/${roomId}/signals/${this.myPeerId}`)))
-        .then(() => get(ref(db, `rooms/${roomId}/peers`)))
+        .then(() => remove(ref(dbSnapshot, `rooms/${roomIdSnapshot}/signals/${myPeerIdSnapshot}`)))
+        .then(() => get(ref(dbSnapshot, `rooms/${roomIdSnapshot}/peers`)))
         .then((snap) => {
           // Se ninguém sobrou, apaga a sala inteira
-          if (!snap.exists()) return remove(ref(db, `rooms/${roomId}`));
+          if (!snap.exists()) return remove(ref(dbSnapshot, `rooms/${roomIdSnapshot}`));
         })
         .catch(() => {});
     });
   }
 
   /**
-   * Envia sinal para um peer específico via Firebase
+   * Envia sinal para um peer específico via Firebase em ordem monotônica estrita
    */
   async sendFirebaseSignal(toPeerId, data) {
-    if (!this.firebaseDb) return;
+    if (!this.firebaseDb || this._leftRoom || !this.roomId) return;
     try {
       const sanitized = removeUndefined({
         from: this.myPeerId,
         ...data
       });
-      const newSignalRef = ref(this.firebaseDb, `rooms/${this.roomId}/signals/${toPeerId}/${Date.now()}_${Math.random().toString(36).substring(2, 6)}`);
+      const seq = String(++this._signalSeq).padStart(6, '0');
+      const sigKey = `${Date.now()}_${seq}_${this.myPeerId}`;
+      const newSignalRef = ref(this.firebaseDb, `rooms/${this.roomId}/signals/${toPeerId}/${sigKey}`);
       await set(newSignalRef, sanitized);
     } catch (err) {
       console.warn('[WebRTC] Erro ao gravar sinal no Firebase:', err);
@@ -1601,9 +1727,14 @@ export class TavernWebRTC {
    */
   handlePeerMetaReceived(fromPeerId, userInfo) {
     if (!userInfo) return;
-    const p = this.peers.get(fromPeerId);
     if (p) {
+      const wasMuted = !!p.peerInfo?.audioMuted;
       p.peerInfo = { ...p.peerInfo, ...userInfo };
+      if (wasMuted && userInfo.audioMuted === false && p.health) {
+        p.health.gaveUp = false;
+        p.health.cycles = 0;
+        p.health.lastProgress = Date.now();
+      }
       if (userInfo.screenStreamId) p.screenStreamId = userInfo.screenStreamId;
       if (userInfo.isScreenSharing) {
         p.isExpectingScreenShare = true;
@@ -1625,11 +1756,17 @@ export class TavernWebRTC {
         this.onRemoteScreenStreamEnded(fromPeerId);
       }
     } else if (userInfo.isScreenSharing === true) {
-      // Se o peer está transmitindo e o espectador ainda não tem o vídeo de tela, solicita renegociação
+      // Se o peer está transmitindo e o espectador ainda não tem o vídeo de tela, solicita renegociação (com throttle para não repetir a cada heartbeat)
       if (p && (!p.remoteScreenStream || p.remoteScreenStream.getVideoTracks().length === 0)) {
-        setTimeout(() => {
-          this.sendSignal(fromPeerId, { type: 'request-screen-renegotiation' });
-        }, 300);
+        const now = Date.now();
+        if (!p._lastScreenReqAt || now - p._lastScreenReqAt > 6000) {
+          p._lastScreenReqAt = now;
+          setTimeout(() => {
+            if (!this._leftRoom && this.peers.has(fromPeerId)) {
+              this.sendSignal(fromPeerId, { type: 'request-screen-renegotiation' });
+            }
+          }, 300);
+        }
       }
     }
   }
@@ -1678,28 +1815,93 @@ export class TavernWebRTC {
   /**
    * Chamado quando um novo participante é detectado
    */
-  async handlePeerDiscovered(peerId, peerInfo) {
-    if (this.peers.has(peerId)) return;
-    const peerIsObserver = !!(peerInfo && peerInfo.observer);
-    const playerPeers = [...this.peers.values()].filter(p => !p.peerInfo?.observer).length;
-    // Jogadores: até 15 na mesa. Observadores não tiram vaga de jogador (ver scheduleObserverCapacityCheck)
-    if ((!peerIsObserver && playerPeers >= (this.isObserver ? 15 : 14)) || this.peers.size >= 20) {
-      console.warn(`[WebRTC] Limite da malha de 15 participantes atingido. Ignorando ${peerId}`);
-      return;
-    }
+  /**
+   * Serializa operações de sinalização/SDP por peer para impedir glare e erros de estado concorrentes
+   */
+  enqueuePeerSignaling(peerId, fn) {
+    const prev = this.peerQueues.get(peerId) || Promise.resolve();
+    const next = prev.then(() => fn()).catch((err) => {
+      console.warn(`[WebRTC][fila ${peerId}] Erro na tarefa de sinalização:`, err);
+    });
+    this.peerQueues.set(peerId, next);
+    return next;
+  }
 
-    // Verificação estrita de versão entre peers
+  /**
+   * Chamado quando um novo participante é detectado
+   */
+  async handlePeerDiscovered(peerId, peerInfo) {
+    if (!peerId || peerId === this.myPeerId || this._leftRoom) return;
+
+    // Verificação estrita de versão entre peers (mesmo se um sinal chegou antes da presença)
     const peerVersion = peerInfo && peerInfo.appVersion;
     if (this.appVersion && peerVersion !== this.appVersion) {
       console.warn(`[WebRTC] Incompatibilidade de versão detectada para ${peerId}: v${peerVersion} (sua versão: v${this.appVersion})`);
+      if (this.peers.has(peerId)) {
+        this.closePeer(peerId);
+      }
       if (typeof this.onVersionMismatch === 'function') {
         this.onVersionMismatch({
           peerId,
-          peerName: peerInfo.name || 'Aventureiro',
+          peerName: peerInfo?.name || 'Aventureiro',
           peerVersion: peerVersion || 'antiga (sem verificação)',
           yourVersion: this.appVersion
         });
       }
+      return;
+    }
+
+    // Se já criamos uma entrada antecipada (ex.: oferta chegou antes de peersRef), promove os metadados reais
+    if (this.peers.has(peerId)) {
+      const existing = this.peers.get(peerId);
+      const wasObserver = !!existing.peerInfo?.observer;
+      const nowObserver = !!(peerInfo && peerInfo.observer);
+      existing.peerInfo = { ...existing.peerInfo, ...peerInfo, _isPlaceholder: false };
+      if (nowObserver !== wasObserver) {
+        // Tipo de participante mudou em relação ao placeholder: recria com trilhas corretas
+        this.closePeer(peerId);
+      } else {
+        if (!nowObserver && existing.remoteStream) {
+          this.onPeerStreamAdded(peerId, existing.peerInfo, existing.remoteStream);
+        }
+        if (typeof this.onPeerInfoUpdated === 'function') {
+          this.onPeerInfoUpdated(peerId, existing.peerInfo);
+        }
+        if (nowObserver) this.notifyObserversChanged();
+        return;
+      }
+    }
+
+    // Se alguém travou/caiu e reentrou rapidamente com o mesmo nome enquanto a conexão antiga já está morta/falhando, remove o fantasma antigo
+    const normalizedNewName = (peerInfo?.name || '').trim().toLowerCase();
+    const peerIsObserver = !!(peerInfo && peerInfo.observer);
+    if (normalizedNewName) {
+      for (const [oldId, oldPeer] of Array.from(this.peers.entries())) {
+        if (oldId === peerId) continue;
+        const oldName = (oldPeer.peerInfo?.name || '').trim().toLowerCase();
+        if (oldName === normalizedNewName && !!oldPeer.peerInfo?.observer === peerIsObserver) {
+          const pc = oldPeer.connection;
+          const hbRec = this.peerLocalHeartbeats.get(oldId);
+          const hbSilentMs = hbRec ? (Date.now() - hbRec.localAt) : 0;
+          const isOldDead = !pc ||
+            pc.connectionState === 'failed' ||
+            pc.connectionState === 'disconnected' ||
+            pc.connectionState === 'closed' ||
+            pc.iceConnectionState === 'failed' ||
+            pc.iceConnectionState === 'disconnected' ||
+            hbSilentMs > 12000;
+          if (isOldDead) {
+            console.warn(`[WebRTC] Substituindo sessão fantasma anterior de ${peerInfo.name} (${oldId} -> ${peerId}).`);
+            this.removeGhostPeerEverywhere(oldId);
+          }
+        }
+      }
+    }
+
+    const playerPeers = [...this.peers.values()].filter(p => !p.peerInfo?.observer).length;
+    // Jogadores: até 15 na mesa. Observadores não tiram vaga de jogador (ver scheduleObserverCapacityCheck)
+    if ((!peerIsObserver && playerPeers >= (this.isObserver ? 15 : 14)) || this.peers.size >= 20) {
+      console.warn(`[WebRTC] Limite da malha de 15 participantes atingido. Ignorando ${peerId}`);
       return;
     }
 
@@ -1725,31 +1927,41 @@ export class TavernWebRTC {
       });
     }
 
-    // Se formos o peer impolítico (ou quem detectou primeiro), iniciamos a oferta
+    // Se formos o peer impolítico (ou quem detectou primeiro), iniciamos a oferta serializada
     if (!isPolite) {
-      try {
-        const offer = await peerObj.connection.createOffer();
-        await peerObj.connection.setLocalDescription(offer);
-        await this.sendSignal(peerId, {
-          type: 'offer',
-          isScreenShareOffer: !!this.isScreenSharing,
-          screenStreamId: this.screenStream ? this.screenStream.id : null,
-          hasScreenAudio: !!this.hasScreenAudio,
-          sdp: {
-            type: peerObj.connection.localDescription.type,
-            sdp: peerObj.connection.localDescription.sdp
-          }
-        });
-      } catch (err) {
-        console.error(`[WebRTC] Erro ao criar oferta para ${peerId}:`, err);
-      }
+      await this.enqueuePeerSignaling(peerId, async () => {
+        const current = this.peers.get(peerId);
+        if (!current || current !== peerObj || !peerObj.connection || peerObj.connection.connectionState === 'closed' || this._leftRoom) return;
+        if (peerObj.connection.signalingState !== 'stable') return;
+        peerObj.makingOffer = true;
+        try {
+          const offer = await peerObj.connection.createOffer();
+          await peerObj.connection.setLocalDescription(offer);
+          await this.sendSignal(peerId, {
+            type: 'offer',
+            isScreenShareOffer: !!this.isScreenSharing,
+            screenStreamId: this.screenStream ? this.screenStream.id : null,
+            hasScreenAudio: !!this.hasScreenAudio,
+            sdp: {
+              type: peerObj.connection.localDescription.type,
+              sdp: peerObj.connection.localDescription.sdp
+            }
+          });
+        } catch (err) {
+          console.error(`[WebRTC] Erro ao criar oferta para ${peerId}:`, err);
+        } finally {
+          peerObj.makingOffer = false;
+        }
+      });
     }
 
     // Se o participante que acabou de ser detectado já estiver transmitindo tela,
     // envia um pedido de renegociação para garantir que receberemos os fluxos de vídeo/áudio de tela
     if (peerInfo && peerInfo.isScreenSharing) {
       setTimeout(() => {
-        this.sendSignal(peerId, { type: 'request-screen-renegotiation' });
+        if (!this._leftRoom && this.peers.has(peerId)) {
+          this.sendSignal(peerId, { type: 'request-screen-renegotiation' });
+        }
       }, 500);
     }
   }
@@ -1759,7 +1971,7 @@ export class TavernWebRTC {
    */
   createPeerConnection(peerId, peerInfo, isPolite) {
     const iceServers = getSavedIceServers();
-    const pc = new RTCPeerConnection({ iceServers });
+    const pc = new RTCPeerConnection({ iceServers, iceCandidatePoolSize: 8 });
 
     const peerData = {
       peerId,
@@ -1836,7 +2048,10 @@ export class TavernWebRTC {
 
     pc.oniceconnectionstatechange = () => {
       console.log(`[WebRTC] ICE com ${peerId}: ${pc.iceConnectionState}`);
-      if (pc.iceConnectionState === 'failed') {
+      if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+        peerData.health.gaveUp = false;
+        peerData.health.cycles = 0;
+      } else if (pc.iceConnectionState === 'failed') {
         // restartIce() sozinho não renegocia (não há handler de negotiationneeded): renegocia de verdade
         console.warn(`[WebRTC][ICE] Conexão com ${peerId} falhou. Renegociando.`);
         this.retryNegotiation(peerId, 'ice-failed');
@@ -1855,6 +2070,8 @@ export class TavernWebRTC {
     pc.onconnectionstatechange = () => {
       console.log(`[WebRTC] Estado de conexão com ${peerId}: ${pc.connectionState}`);
       if (pc.connectionState === 'connected') {
+        peerData.health.gaveUp = false;
+        peerData.health.cycles = 0;
         this.applyQualityProfileToConnection(pc);
       } else if (pc.connectionState === 'failed') {
         console.warn(`[WebRTC][conexão] Conexão com ${peerId} falhou. Renegociando.`);
@@ -1867,23 +2084,23 @@ export class TavernWebRTC {
       console.log(`[WebRTC] Faixa remota recebida de ${peerId}:`, event.track.kind, event.streams);
       const track = event.track;
       let stream = event.streams && event.streams[0] ? event.streams[0] : null;
+      const latestInfo = peerData.peerInfo || peerInfo;
 
       // Mídia vinda de observador: jogadores ignoram; observadores só recebem a voz (sem tile no grid)
-      if (peerData.peerInfo?.observer) {
+      if (latestInfo?.observer) {
         if (track.kind !== 'audio') return;
         if (!this.isObserver) {
           // Sussurro: o observador manda a voz só para este jogador (sem tile e sem repassar)
-          // Uma faixa nova a cada vez que o observador começa a sussurrar
           peerData.whisperStream = new MediaStream([track]);
-          console.log(`[Sussurro] Voz de observador recebida de ${peerData.peerInfo?.name || peerId}.`);
-          if (peerData.whisperActive) this.onWhisperState(peerId, peerData.peerInfo, true, peerData.whisperStream);
+          console.log(`[Sussurro] Voz de observador recebida de ${latestInfo?.name || peerId}.`);
+          if (peerData.whisperActive) this.onWhisperState(peerId, latestInfo, true, peerData.whisperStream);
           return;
         }
-        if (!peerData.remoteStream.getTracks().includes(track)) peerData.remoteStream.addTrack(track);
+        replaceStreamTrackByKind(peerData.remoteStream, track);
         this.setupRemoteAudioAnalyser(peerId, peerData.remoteStream);
-        track.onunmute = () => this.onObserverVoiceAdded(peerId, peerData.peerInfo, peerData.remoteStream);
+        track.onunmute = () => this.onObserverVoiceAdded(peerId, latestInfo, peerData.remoteStream);
         track.onended = () => this.cleanupRemoteAudioAnalyser(peerId);
-        this.onObserverVoiceAdded(peerId, peerData.peerInfo, peerData.remoteStream);
+        this.onObserverVoiceAdded(peerId, latestInfo, peerData.remoteStream);
         return;
       }
 
@@ -1900,13 +2117,11 @@ export class TavernWebRTC {
             peerData.screenStreamId = stream.id;
           }
           if (!peerData.remoteScreenStream) {
-            peerData.remoteScreenStream = stream || new MediaStream();
+            peerData.remoteScreenStream = new MediaStream();
           }
-          if (!peerData.remoteScreenStream.getTracks().includes(track)) {
-            peerData.remoteScreenStream.addTrack(track);
-          }
+          replaceStreamTrackByKind(peerData.remoteScreenStream, track);
           if (typeof this.onRemoteScreenStreamAdded === 'function') {
-            this.onRemoteScreenStreamAdded(peerId, peerInfo, peerData.remoteScreenStream);
+            this.onRemoteScreenStreamAdded(peerId, latestInfo, peerData.remoteScreenStream);
           }
         } else {
           console.log(`[WebRTC] Renderizando câmera remota de ${peerId}`);
@@ -1916,17 +2131,12 @@ export class TavernWebRTC {
           if (!peerData.remoteStream) {
             peerData.remoteStream = new MediaStream();
           }
-          if (!peerData.remoteStream.getTracks().includes(track)) {
-            peerData.remoteStream.addTrack(track);
-          }
+          replaceStreamTrackByKind(peerData.remoteStream, track);
           // Só marca vídeo como ligado se for um stream de câmera real com faixa ativa
           const hasRealVideoStream = !!(stream && stream.getVideoTracks().length > 0);
-          if (hasRealVideoStream && track.enabled && track.readyState === 'live' && !peerInfo?.videoOff) {
+          if (hasRealVideoStream && track.enabled && track.readyState === 'live' && !latestInfo?.videoOff) {
             if (peerData.peerInfo) {
               peerData.peerInfo.videoOff = false;
-            }
-            if (peerInfo) {
-              peerInfo.videoOff = false;
             }
           }
           this.onPeerStreamAdded(peerId, peerData.peerInfo || peerInfo, peerData.remoteStream);
@@ -1953,11 +2163,11 @@ export class TavernWebRTC {
         // ÁUDIO: Diferenciar áudio de tela vs áudio de microfone/voz
         const isScreenStream = (stream && peerData.screenStreamId && stream.id === peerData.screenStreamId) ||
                                (peerData.remoteScreenStream && stream && stream.id === peerData.remoteScreenStream.id);
-        const hasVoiceAudio = peerData.remoteStream && peerData.remoteStream.getAudioTracks().length > 0;
-        const isScreenAudio = isScreenStream || 
-                              ((peerData.peerInfo?.isScreenSharing || peerInfo?.isScreenSharing) && (hasVoiceAudio || peerInfo?.hasScreenAudio)) ||
+        const hasVoiceAudio = peerData.remoteStream && peerData.remoteStream.getAudioTracks().some(t => t !== track && t.readyState === 'live');
+        const isScreenAudio = isScreenStream ||
+                              ((latestInfo?.isScreenSharing) && (hasVoiceAudio || latestInfo?.hasScreenAudio)) ||
                               track.contentHint === 'music' ||
-                              track.label.toLowerCase().includes('screen') || 
+                              track.label.toLowerCase().includes('screen') ||
                               track.label.toLowerCase().includes('display') ||
                               track.label.toLowerCase().includes('sistema') ||
                               track.label.toLowerCase().includes('system') ||
@@ -1967,13 +2177,11 @@ export class TavernWebRTC {
         if (isScreenAudio) {
           console.log(`[WebRTC] Faixa de áudio de TELA recebida de ${peerId}:`, track);
           if (!peerData.remoteScreenStream) {
-            peerData.remoteScreenStream = stream || new MediaStream();
+            peerData.remoteScreenStream = new MediaStream();
           }
-          if (!peerData.remoteScreenStream.getTracks().includes(track)) {
-            peerData.remoteScreenStream.addTrack(track);
-          }
+          replaceStreamTrackByKind(peerData.remoteScreenStream, track);
           if (typeof this.onRemoteScreenStreamAdded === 'function') {
-            this.onRemoteScreenStreamAdded(peerId, peerInfo, peerData.remoteScreenStream);
+            this.onRemoteScreenStreamAdded(peerId, latestInfo, peerData.remoteScreenStream);
           }
 
           const handleScreenAudioEnded = () => {
@@ -1987,9 +2195,7 @@ export class TavernWebRTC {
           if (!peerData.remoteStream) {
             peerData.remoteStream = new MediaStream();
           }
-          if (!peerData.remoteStream.getTracks().includes(track)) {
-            peerData.remoteStream.addTrack(track);
-          }
+          const replacedOldAudio = replaceStreamTrackByKind(peerData.remoteStream, track);
 
           // Inicia analisador em tempo real para detectar quando o participante fala (mesmo baixo)
           this.setupRemoteAudioAnalyser(peerId, peerData.remoteStream);
@@ -1997,17 +2203,24 @@ export class TavernWebRTC {
           // Quando os primeiros pacotes RTP chegam e o track desmuta, re-sincroniza a reprodução do áudio
           track.onunmute = () => {
             console.log(`[WebRTC] Faixa de áudio de ${peerId} desmutada (RTP ativo). Sincronizando saída de áudio...`);
-            if (peerData.remoteStream) {
+            if (peerData.remoteStream && this.peers.get(peerId) === peerData) {
               this.setupRemoteAudioAnalyser(peerId, peerData.remoteStream);
               this.onPeerStreamAdded(peerId, peerData.peerInfo || peerInfo, peerData.remoteStream);
+              this.onPeerMediaStalled(peerId, peerData.peerInfo || peerInfo, peerData.remoteStream, 0);
             }
           };
 
           track.onended = () => {
+            if (peerData.remoteStream) {
+              try { peerData.remoteStream.removeTrack(track); } catch (e) {}
+            }
             this.cleanupRemoteAudioAnalyser(peerId);
           };
 
           this.onPeerStreamAdded(peerId, peerData.peerInfo || peerInfo, peerData.remoteStream);
+          if (replacedOldAudio) {
+            this.onPeerMediaStalled(peerId, peerData.peerInfo || peerInfo, peerData.remoteStream, 0);
+          }
         }
       }
     };
@@ -2060,7 +2273,7 @@ export class TavernWebRTC {
    */
   async handleIncomingSignal(signal) {
     const fromPeerId = signal.from;
-    if (!fromPeerId || fromPeerId === this.myPeerId) return;
+    if (!fromPeerId || fromPeerId === this.myPeerId || this._leftRoom) return;
 
     // Tratamento de encerramento imediato de tela remota
     if (signal.type === 'screen-share-ended') {
@@ -2082,49 +2295,6 @@ export class TavernWebRTC {
       return;
     }
 
-    // Tratamento de pedido de renegociação para quem acabou de entrar na sala
-    if (signal.type === 'request-screen-renegotiation') {
-      if (this.isScreenSharing && this.screenStream) {
-        console.log(`[WebRTC] Pedido de renegociação de tela recebido de ${fromPeerId}. Enviando oferta...`);
-        const peerObj = this.peers.get(fromPeerId);
-        if (peerObj && peerObj.connection) {
-          const pc = peerObj.connection;
-          const senders = pc.getSenders();
-          this.screenStream.getTracks().forEach(track => {
-            if (!senders.some(s => s.track && s.track.id === track.id)) {
-              try {
-                pc.addTrack(track, this.screenStream);
-              } catch (e) {}
-            }
-          });
-          try {
-            const offer = await pc.createOffer();
-            await pc.setLocalDescription(offer);
-            await this.sendSignal(fromPeerId, {
-              type: 'offer',
-              isScreenShareOffer: true,
-              screenStreamId: this.screenStream.id,
-              hasScreenAudio: this.hasScreenAudio,
-              sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
-            });
-            console.log(`[WebRTC] Oferta de tela enviada com sucesso para ${fromPeerId}`);
-          } catch (err) {
-            console.warn('[WebRTC] Erro ao enviar oferta de renegociação:', err);
-          }
-        }
-      }
-      return;
-    }
-
-    // Passo 3 do reparo: o outro lado pediu para renegociar (eu sou quem tem a conexão)
-    if (signal.type === 'renegotiate') {
-      if (this.peers.has(fromPeerId)) {
-        console.warn(`[WebRTC][negociação] ${fromPeerId} pediu renegociação.`);
-        this.retryNegotiation(fromPeerId, 'pedido-do-outro-lado');
-      }
-      return;
-    }
-
     // Sussurro: o observador avisa que está falando só comigo (não cria peer novo por isso)
     if (signal.type === 'whisper-state') {
       const whisperPeer = this.peers.get(fromPeerId);
@@ -2135,16 +2305,8 @@ export class TavernWebRTC {
       return;
     }
 
-    let peerObj = this.peers.get(fromPeerId);
-    if (!peerObj) {
-      const isPolite = this.myPeerId < fromPeerId;
-      peerObj = this.createPeerConnection(fromPeerId, { name: 'Aventureiro', role: 'jogador' }, isPolite);
-      this.peers.set(fromPeerId, peerObj);
-    }
-
-    const pc = peerObj.connection;
-
     if (signal.type === 'cam-state') {
+      const peerObj = this.peers.get(fromPeerId);
       if (peerObj && peerObj.peerInfo) {
         peerObj.peerInfo.videoOff = !!signal.videoOff;
         if (typeof this.onPeerInfoUpdated === 'function') {
@@ -2154,179 +2316,288 @@ export class TavernWebRTC {
       return;
     }
 
-    try {
-      if (signal.type === 'offer') {
-        if (signal.isScreenShareOffer || signal.screenStreamId) {
-          peerObj.isExpectingScreenShare = true;
-          peerObj.screenStreamId = signal.screenStreamId || peerObj.screenStreamId;
-          if (peerObj.peerInfo) {
-            peerObj.peerInfo.isScreenSharing = true;
-            peerObj.peerInfo.hasScreenAudio = !!signal.hasScreenAudio;
-          }
-        } else if (signal.isCamToggle) {
-          peerObj.isExpectingScreenShare = false;
-        }
-
-        if (signal.videoOff !== undefined && peerObj.peerInfo) {
-          peerObj.peerInfo.videoOff = !!signal.videoOff;
-          if (typeof this.onPeerInfoUpdated === 'function') {
-            this.onPeerInfoUpdated(fromPeerId, peerObj.peerInfo);
-          }
-        }
-
-        const offerCollision = (pc.signalingState !== 'stable');
-        peerObj.ignoreOffer = !peerObj.isPolite && offerCollision;
-
-        if (peerObj.ignoreOffer) {
-          console.warn(`[WebRTC] Glare detectado. Ignorando oferta do peer ${fromPeerId}`);
-          return;
-        }
-
-        if (offerCollision) {
-          try {
-            await pc.setLocalDescription({ type: 'rollback' });
-          } catch (e) {}
-        }
-
-        const sdpInit = signal.sdp ? { type: signal.sdp.type, sdp: signal.sdp.sdp } : null;
-        if (!sdpInit) return;
-
-        await pc.setRemoteDescription(new RTCSessionDescription(sdpInit));
-
-        // Esvazia ICE Candidates pendentes
-        while (peerObj.pendingCandidates.length > 0) {
-          const candidate = peerObj.pendingCandidates.shift();
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (candErr) {
-            console.warn('[WebRTC] Aviso ao aplicar candidate pendente no offer:', candErr);
-          }
-        }
-
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-
-        await this.sendSignal(fromPeerId, {
-          type: 'answer',
-          sdp: {
-            type: pc.localDescription.type,
-            sdp: pc.localDescription.sdp
-          }
-        });
-
-        // Se estamos transmitindo tela, verifica se o recém-chegado já recebeu nossas faixas
-        if (this.isScreenSharing && this.screenStream) {
-          setTimeout(async () => {
-            if (pc.signalingState === 'stable' && this.isScreenSharing && this.screenStream) {
-              const senders = pc.getSenders();
-              const hasScreenTrack = this.screenStream.getVideoTracks().some(vTrack =>
-                senders.some(s => s.track && s.track.id === vTrack.id)
-              );
-              if (!hasScreenTrack) {
-                console.log(`[WebRTC] Enviando oferta subsequente de tela para ${fromPeerId}...`);
-                this.screenStream.getTracks().forEach(t => {
-                  try { pc.addTrack(t, this.screenStream); } catch (e) {}
-                });
-                try {
-                  const renegOffer = await pc.createOffer();
-                  await pc.setLocalDescription(renegOffer);
-                  await this.sendSignal(fromPeerId, {
-                    type: 'offer',
-                    isScreenShareOffer: true,
-                    screenStreamId: this.screenStream.id,
-                    hasScreenAudio: this.hasScreenAudio,
-                    sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
-                  });
-                } catch (e) {}
-              }
-            }
-          }, 600);
-        }
-
-      } else if (signal.type === 'answer') {
-        const sdpInit = signal.sdp ? { type: signal.sdp.type, sdp: signal.sdp.sdp } : null;
-        if (!sdpInit) return;
-
-        if (pc.signalingState !== 'have-local-offer') {
-          console.warn(`[WebRTC] Ignorando answer duplicado pois signalingState é ${pc.signalingState}`);
-          return;
-        }
-
-        await pc.setRemoteDescription(new RTCSessionDescription(sdpInit));
-
-        while (peerObj.pendingCandidates.length > 0) {
-          const candidate = peerObj.pendingCandidates.shift();
-          try {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
-          } catch (candErr) {
-            console.warn('[WebRTC] Aviso ao aplicar candidate pendente no answer:', candErr);
-          }
-        }
-
-        // Se estamos compartilhando tela e a conexão estabilizou, garante que as faixas de tela sejam negociadas
-        if (this.isScreenSharing && this.screenStream) {
-          setTimeout(async () => {
-            if (pc.signalingState === 'stable' && this.isScreenSharing && this.screenStream) {
-              const senders = pc.getSenders();
-              const hasScreenTrack = this.screenStream.getVideoTracks().some(vTrack =>
-                senders.some(s => s.track && s.track.id === vTrack.id)
-              );
-              if (!hasScreenTrack) {
-                console.log(`[WebRTC] Renegociando tela pendente com ${fromPeerId}...`);
-                this.screenStream.getTracks().forEach(t => {
-                  try { pc.addTrack(t, this.screenStream); } catch (e) {}
-                });
-                try {
-                  const offer = await pc.createOffer();
-                  await pc.setLocalDescription(offer);
-                  await this.sendSignal(fromPeerId, {
-                    type: 'offer',
-                    isScreenShareOffer: true,
-                    screenStreamId: this.screenStream.id,
-                    hasScreenAudio: this.hasScreenAudio,
-                    sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
-                  });
-                } catch (renegErr) {
-                  console.warn('[WebRTC] Erro ao renegociar tela após answer:', renegErr);
-                }
-              }
-            }
-          }, 500);
-        }
-
-      } else if (signal.type === 'candidate') {
-        if (signal.candidate) {
-          if (pc.remoteDescription && pc.remoteDescription.type) {
-            try {
-              await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
-            } catch (candErr) {
-              console.warn('[WebRTC] Aviso ao adicionar candidate recebido:', candErr);
-            }
-          } else {
-            peerObj.pendingCandidates.push(signal.candidate);
-          }
+    // Passo 3 do reparo: o outro lado pediu para renegociar/recriar
+    if (signal.type === 'renegotiate') {
+      const p = this.peers.get(fromPeerId);
+      if (p) {
+        const pc = p.connection;
+        if (!pc || pc.connectionState === 'failed' || pc.iceConnectionState === 'failed' || pc.connectionState === 'new') {
+          console.warn(`[WebRTC][negociação] ${fromPeerId} pediu reparo e conexão está ${pc?.connectionState}. Recriando conexão.`);
+          await this.rebuildPeerConnection(fromPeerId);
+        } else {
+          console.warn(`[WebRTC][negociação] ${fromPeerId} pediu renegociação.`);
+          await this.retryNegotiation(fromPeerId, 'pedido-do-outro-lado');
         }
       }
-    } catch (err) {
-      // Antes isso era só um console.error e a conversa ficava parada. Agora tenta de novo.
-      console.error(`[WebRTC][negociação] Falha ao processar "${signal.type}" de ${fromPeerId}:`, err);
-      this.retryNegotiation(fromPeerId, 'erro-' + signal.type);
+      return;
     }
+
+    // Toda operação SDP/ICE para um mesmo peer passa pela fila serializada para eliminar corrida/glare
+    await this.enqueuePeerSignaling(fromPeerId, async () => {
+      if (this._leftRoom) return;
+
+      // Pedido de renegociação de tela para quem acabou de entrar na sala
+      if (signal.type === 'request-screen-renegotiation') {
+        if (this.isScreenSharing && this.screenStream) {
+          console.log(`[WebRTC] Pedido de renegociação de tela recebido de ${fromPeerId}. Enviando oferta...`);
+          const peerObj = this.peers.get(fromPeerId);
+          if (peerObj && peerObj.connection && peerObj.connection.connectionState !== 'closed') {
+            const pc = peerObj.connection;
+            const senders = pc.getSenders();
+            this.screenStream.getTracks().forEach(track => {
+              if (!senders.some(s => s.track && s.track.id === track.id)) {
+                try {
+                  pc.addTrack(track, this.screenStream);
+                } catch (e) {}
+              }
+            });
+            if (pc.signalingState !== 'stable') {
+              setTimeout(() => this.retryNegotiation(fromPeerId, 'screen-req', false), 600);
+              return;
+            }
+            peerObj.makingOffer = true;
+            try {
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              await this.sendSignal(fromPeerId, {
+                type: 'offer',
+                isScreenShareOffer: true,
+                screenStreamId: this.screenStream.id,
+                hasScreenAudio: this.hasScreenAudio,
+                sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
+              });
+              console.log(`[WebRTC] Oferta de tela enviada com sucesso para ${fromPeerId}`);
+            } catch (err) {
+              console.warn('[WebRTC] Erro ao enviar oferta de renegociação:', err);
+            } finally {
+              peerObj.makingOffer = false;
+            }
+          }
+        }
+        return;
+      }
+
+      // O outro lado recriou a RTCPeerConnection do zero: recria aqui também sem remover o tile da tela
+      if (signal.type === 'peer-rebuild') {
+        const old = this.peers.get(fromPeerId);
+        if (old) {
+          console.warn(`[WebRTC][reparo] Recriando conexão local acompanhando ${fromPeerId}.`);
+          if (old.watchdog) clearInterval(old.watchdog);
+          this.cleanupRemoteAudioAnalyser(fromPeerId);
+          try { old.connection.close(); } catch (e) {}
+          const fresh = this.createPeerConnection(fromPeerId, old.peerInfo, old.isPolite);
+          fresh.isExpectingScreenShare = old.isExpectingScreenShare;
+          fresh.screenStreamId = old.screenStreamId;
+          fresh.health = old.health || fresh.health;
+          fresh.health.lastAction = Date.now();
+          this.peers.set(fromPeerId, fresh);
+        }
+        return;
+      }
+
+      let peerObj = this.peers.get(fromPeerId);
+      if (!peerObj) {
+        const rosterInfo = this.roomRoster.get(fromPeerId);
+        const initialInfo = rosterInfo ? { ...rosterInfo } : { name: 'Aventureiro', role: 'jogador', _isPlaceholder: true };
+        const isPolite = this.myPeerId < fromPeerId;
+        peerObj = this.createPeerConnection(fromPeerId, initialInfo, isPolite);
+        this.peers.set(fromPeerId, peerObj);
+      }
+
+      const pc = peerObj.connection;
+      if (!pc || pc.connectionState === 'closed') return;
+
+      try {
+        if (signal.type === 'offer') {
+          if (signal.isScreenShareOffer || signal.screenStreamId) {
+            peerObj.isExpectingScreenShare = true;
+            peerObj.screenStreamId = signal.screenStreamId || peerObj.screenStreamId;
+            if (peerObj.peerInfo) {
+              peerObj.peerInfo.isScreenSharing = true;
+              peerObj.peerInfo.hasScreenAudio = !!signal.hasScreenAudio;
+            }
+          } else if (signal.isCamToggle) {
+            peerObj.isExpectingScreenShare = false;
+          }
+
+          if (signal.videoOff !== undefined && peerObj.peerInfo) {
+            peerObj.peerInfo.videoOff = !!signal.videoOff;
+            if (typeof this.onPeerInfoUpdated === 'function') {
+              this.onPeerInfoUpdated(fromPeerId, peerObj.peerInfo);
+            }
+          }
+
+          const offerCollision = (peerObj.makingOffer || pc.signalingState !== 'stable');
+          peerObj.ignoreOffer = !peerObj.isPolite && offerCollision;
+
+          if (peerObj.ignoreOffer) {
+            console.warn(`[WebRTC] Glare detectado. Ignorando oferta do peer ${fromPeerId}`);
+            return;
+          }
+
+          if (offerCollision) {
+            try {
+              await pc.setLocalDescription({ type: 'rollback' });
+            } catch (e) {}
+          }
+
+          const sdpInit = signal.sdp ? { type: signal.sdp.type, sdp: signal.sdp.sdp } : null;
+          if (!sdpInit) return;
+
+          await pc.setRemoteDescription(new RTCSessionDescription(sdpInit));
+
+          // Esvazia ICE Candidates pendentes
+          while (peerObj.pendingCandidates.length > 0) {
+            const candidate = peerObj.pendingCandidates.shift();
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (candErr) {
+              console.warn('[WebRTC] Aviso ao aplicar candidate pendente no offer:', candErr);
+            }
+          }
+
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+
+          await this.sendSignal(fromPeerId, {
+            type: 'answer',
+            sdp: {
+              type: pc.localDescription.type,
+              sdp: pc.localDescription.sdp
+            }
+          });
+
+          // Se estamos transmitindo tela, verifica se o recém-chegado já recebeu nossas faixas
+          if (this.isScreenSharing && this.screenStream) {
+            setTimeout(() => {
+              this.enqueuePeerSignaling(fromPeerId, async () => {
+                const p = this.peers.get(fromPeerId);
+                if (!p || !p.connection || p.connection.connectionState === 'closed' || this._leftRoom) return;
+                if (p.connection.signalingState === 'stable' && this.isScreenSharing && this.screenStream) {
+                  const senders = p.connection.getSenders();
+                  const hasScreenTrack = this.screenStream.getVideoTracks().some(vTrack =>
+                    senders.some(s => s.track && s.track.id === vTrack.id)
+                  );
+                  if (!hasScreenTrack) {
+                    console.log(`[WebRTC] Enviando oferta subsequente de tela para ${fromPeerId}...`);
+                    this.screenStream.getTracks().forEach(t => {
+                      try { p.connection.addTrack(t, this.screenStream); } catch (e) {}
+                    });
+                    p.makingOffer = true;
+                    try {
+                      const renegOffer = await p.connection.createOffer();
+                      await p.connection.setLocalDescription(renegOffer);
+                      await this.sendSignal(fromPeerId, {
+                        type: 'offer',
+                        isScreenShareOffer: true,
+                        screenStreamId: this.screenStream.id,
+                        hasScreenAudio: this.hasScreenAudio,
+                        sdp: { type: p.connection.localDescription.type, sdp: p.connection.localDescription.sdp }
+                      });
+                    } catch (e) {} finally {
+                      p.makingOffer = false;
+                    }
+                  }
+                }
+              });
+            }, 600);
+          }
+
+        } else if (signal.type === 'answer') {
+          const sdpInit = signal.sdp ? { type: signal.sdp.type, sdp: signal.sdp.sdp } : null;
+          if (!sdpInit) return;
+
+          if (pc.signalingState !== 'have-local-offer') {
+            console.warn(`[WebRTC] Ignorando answer duplicado pois signalingState é ${pc.signalingState}`);
+            return;
+          }
+
+          await pc.setRemoteDescription(new RTCSessionDescription(sdpInit));
+
+          while (peerObj.pendingCandidates.length > 0) {
+            const candidate = peerObj.pendingCandidates.shift();
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (candErr) {
+              console.warn('[WebRTC] Aviso ao aplicar candidate pendente no answer:', candErr);
+            }
+          }
+
+          // Se estamos compartilhando tela e a conexão estabilizou, garante que as faixas de tela sejam negociadas
+          if (this.isScreenSharing && this.screenStream) {
+            setTimeout(() => {
+              this.enqueuePeerSignaling(fromPeerId, async () => {
+                const p = this.peers.get(fromPeerId);
+                if (!p || !p.connection || p.connection.connectionState === 'closed' || this._leftRoom) return;
+                if (p.connection.signalingState === 'stable' && this.isScreenSharing && this.screenStream) {
+                  const senders = p.connection.getSenders();
+                  const hasScreenTrack = this.screenStream.getVideoTracks().some(vTrack =>
+                    senders.some(s => s.track && s.track.id === vTrack.id)
+                  );
+                  if (!hasScreenTrack) {
+                    console.log(`[WebRTC] Renegociando tela pendente com ${fromPeerId}...`);
+                    this.screenStream.getTracks().forEach(t => {
+                      try { p.connection.addTrack(t, this.screenStream); } catch (e) {}
+                    });
+                    p.makingOffer = true;
+                    try {
+                      const offer = await p.connection.createOffer();
+                      await p.connection.setLocalDescription(offer);
+                      await this.sendSignal(fromPeerId, {
+                        type: 'offer',
+                        isScreenShareOffer: true,
+                        screenStreamId: this.screenStream.id,
+                        hasScreenAudio: this.hasScreenAudio,
+                        sdp: { type: p.connection.localDescription.type, sdp: p.connection.localDescription.sdp }
+                      });
+                    } catch (renegErr) {
+                      console.warn('[WebRTC] Erro ao renegociar tela após answer:', renegErr);
+                    } finally {
+                      p.makingOffer = false;
+                    }
+                  }
+                }
+              });
+            }, 500);
+          }
+
+        } else if (signal.type === 'candidate') {
+          if (signal.candidate) {
+            if (pc.remoteDescription && pc.remoteDescription.type) {
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
+              } catch (candErr) {
+                console.warn('[WebRTC] Aviso ao adicionar candidate recebido:', candErr);
+              }
+            } else {
+              peerObj.pendingCandidates.push(signal.candidate);
+            }
+          }
+        }
+      } catch (err) {
+        // Antes isso era só um console.error e a conversa ficava parada. Agora tenta de novo.
+        console.error(`[WebRTC][negociação] Falha ao processar "${signal.type}" de ${fromPeerId}:`, err);
+        setTimeout(() => this.retryNegotiation(fromPeerId, 'erro-' + signal.type), 500);
+      }
+    });
   }
 
   /**
    * Notifica peers sobre alteração de metadata local (mute, nome, etc)
    */
-  broadcastMetadata() {
+  broadcastMetadata(isHeartbeat = false) {
+    if (this._leftRoom) return;
     const meta = {
       type: 'meta',
       userInfo: this.userInfo
     };
 
     // Via DataChannel para baixa latência
-    for (const peer of this.peers.values()) {
-      if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
-        peer.dataChannel.send(JSON.stringify(meta));
+    if (!isHeartbeat) {
+      for (const peer of this.peers.values()) {
+        if (peer.dataChannel && peer.dataChannel.readyState === 'open') {
+          try { peer.dataChannel.send(JSON.stringify(meta)); } catch (e) {}
+        }
       }
     }
 
@@ -2343,7 +2614,7 @@ export class TavernWebRTC {
     }
 
     // Se estiver em modo BroadcastChannel
-    if (this.broadcastChannel) {
+    if (this.broadcastChannel && !isHeartbeat) {
       this.broadcastChannel.postMessage({
         type: 'peer-meta',
         from: this.myPeerId,
@@ -2352,11 +2623,13 @@ export class TavernWebRTC {
     }
 
     // Se estiver no Firebase
-    if (this.isFirebaseMode && this.firebaseDb) {
+    if (this.isFirebaseMode && this.firebaseDb && this.roomId && !this._leftRoom) {
       const myPeerRef = ref(this.firebaseDb, `rooms/${this.roomId}/peers/${this.myPeerId}`);
+      this._hbSeq = (this._hbSeq || 0) + 1;
       set(myPeerRef, removeUndefined({
         id: this.myPeerId,
         ...this.userInfo,
+        hb: this._hbSeq,
         updatedAt: Date.now()
       })).catch(err => console.warn('[WebRTC] Erro ao atualizar status no Firebase:', err));
     }
@@ -2552,7 +2825,7 @@ export class TavernWebRTC {
       }
       if (h.cycles >= 3) {
         h.gaveUp = true;
-        console.warn(`[WebRTC][áudio] Desisti de reconectar o áudio de ${name} (${pc.connectionState}). Vou tentar de novo quando o áudio voltar a chegar.`);
+        console.warn(`[WebRTC][áudio] Desisti de reconectar o áudio de ${name} (${pc.connectionState}). Vou tentar de novo se o estado mudar.`);
         return;
       }
 
@@ -2581,77 +2854,97 @@ export class TavernWebRTC {
 
   /**
    * Cria uma nova RTCPeerConnection com o mesmo jogador, sem tirar o tile da tela
-   * (não dispara "saiu da sala"), e manda uma nova oferta.
+   * (não dispara "saiu da sala"), avisa o outro lado via 'peer-rebuild' e manda nova oferta.
    */
   async rebuildPeerConnection(peerId) {
-    const old = this.peers.get(peerId);
-    if (!old) return;
-    const wasWhisperTarget = this.whisperTargets.has(peerId);
-    try { old.connection.close(); } catch (e) {}
-    this.peers.delete(peerId);
+    return this.enqueuePeerSignaling(peerId, async () => {
+      const old = this.peers.get(peerId);
+      if (!old || this._leftRoom) return;
+      const wasWhisperTarget = this.whisperTargets.has(peerId);
+      if (old.watchdog) clearInterval(old.watchdog);
+      this.cleanupRemoteAudioAnalyser(peerId);
+      try { old.connection.close(); } catch (e) {}
+      this.peers.delete(peerId);
 
-    const fresh = this.createPeerConnection(peerId, old.peerInfo, old.isPolite);
-    fresh.health = old.health;
-    fresh.health.lastAction = Date.now();
-    this.peers.set(peerId, fresh);
+      const fresh = this.createPeerConnection(peerId, old.peerInfo, old.isPolite);
+      fresh.isExpectingScreenShare = old.isExpectingScreenShare;
+      fresh.screenStreamId = old.screenStreamId;
+      fresh.health = old.health;
+      fresh.health.lastAction = Date.now();
+      this.peers.set(peerId, fresh);
 
-    if (!fresh.isPolite) {
-      try {
-        const offer = await fresh.connection.createOffer();
-        await fresh.connection.setLocalDescription(offer);
-        await this.sendSignal(peerId, {
-          type: 'offer',
-          isScreenShareOffer: !!this.isScreenSharing,
-          screenStreamId: this.screenStream ? this.screenStream.id : null,
-          hasScreenAudio: !!this.hasScreenAudio,
-          sdp: { type: fresh.connection.localDescription.type, sdp: fresh.connection.localDescription.sdp }
-        });
-      } catch (err) {
-        console.warn(`[WebRTC][negociação] Falha ao enviar oferta nova para ${peerId}:`, err);
+      if (!fresh.isPolite) {
+        fresh.makingOffer = true;
+        try {
+          await this.sendSignal(peerId, { type: 'peer-rebuild' });
+          const offer = await fresh.connection.createOffer();
+          await fresh.connection.setLocalDescription(offer);
+          await this.sendSignal(peerId, {
+            type: 'offer',
+            isScreenShareOffer: !!this.isScreenSharing,
+            screenStreamId: this.screenStream ? this.screenStream.id : null,
+            hasScreenAudio: !!this.hasScreenAudio,
+            sdp: { type: fresh.connection.localDescription.type, sdp: fresh.connection.localDescription.sdp }
+          });
+        } catch (err) {
+          console.warn(`[WebRTC][negociação] Falha ao enviar oferta nova para ${peerId}:`, err);
+        } finally {
+          fresh.makingOffer = false;
+        }
       }
-    }
-    if (wasWhisperTarget) {
-      this.whisperTargets.delete(peerId);
-      this.startWhisperTo(peerId);
-    }
+      if (wasWhisperTarget) {
+        this.whisperTargets.delete(peerId);
+        this.startWhisperTo(peerId);
+      }
+    });
   }
 
   /**
    * Renegocia com ICE restart. Se o outro lado está no meio de outra negociação, espera e tenta de novo.
    */
   async retryNegotiation(peerId, reason, iceRestart = true) {
-    const peer = this.peers.get(peerId);
-    if (!peer || !peer.connection) return false;
-    const pc = peer.connection;
-    if (pc.signalingState !== 'stable') {
-      if (peer.health.waits < 10) {
-        peer.health.waits++;
-        setTimeout(() => this.retryNegotiation(peerId, reason, iceRestart), 1500);
+    return this.enqueuePeerSignaling(peerId, async () => {
+      const peer = this.peers.get(peerId);
+      if (!peer || !peer.connection || peer.connection.connectionState === 'closed' || this._leftRoom) return false;
+      const pc = peer.connection;
+      if (pc.signalingState !== 'stable') {
+        if (peer.health.waits < 10) {
+          peer.health.waits++;
+          setTimeout(() => this.retryNegotiation(peerId, reason, iceRestart), 1500);
+        }
+        return false;
       }
-      return false;
-    }
-    peer.health.waits = 0;
-    try {
-      const offer = await pc.createOffer(iceRestart ? { iceRestart: true } : undefined);
-      await pc.setLocalDescription(offer);
-      await this.sendSignal(peerId, {
-        type: 'offer',
-        sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
-      });
-      console.log(`[WebRTC][negociação] Nova oferta enviada para ${peerId} (${reason}).`);
-      return true;
-    } catch (err) {
-      console.warn(`[WebRTC][negociação] Falha ao renegociar com ${peerId} (${reason}):`, err);
-      return false;
-    }
+      peer.health.waits = 0;
+      peer.makingOffer = true;
+      try {
+        const offer = await pc.createOffer(iceRestart ? { iceRestart: true } : undefined);
+        await pc.setLocalDescription(offer);
+        await this.sendSignal(peerId, {
+          type: 'offer',
+          isScreenShareOffer: !!this.isScreenSharing,
+          screenStreamId: this.screenStream ? this.screenStream.id : null,
+          hasScreenAudio: !!this.hasScreenAudio,
+          sdp: { type: pc.localDescription.type, sdp: pc.localDescription.sdp }
+        });
+        console.log(`[WebRTC][negociação] Nova oferta enviada para ${peerId} (${reason}).`);
+        return true;
+      } catch (err) {
+        console.warn(`[WebRTC][negociação] Falha ao renegociar com ${peerId} (${reason}):`, err);
+        return false;
+      } finally {
+        peer.makingOffer = false;
+      }
+    });
   }
 
   closePeer(peerId) {
     this.cleanupRemoteAudioAnalyser(peerId);
+    this.peerQueues.delete(peerId);
     const peerObj = this.peers.get(peerId);
     if (peerObj) {
+      if (peerObj.watchdog) clearInterval(peerObj.watchdog);
       if (peerObj.connection) {
-        peerObj.connection.close();
+        try { peerObj.connection.close(); } catch (e) {}
       }
       this.peers.delete(peerId);
       if (this.whisperTargets.delete(peerId)) {
@@ -2740,9 +3033,213 @@ export class TavernWebRTC {
   }
 
   /**
+   * Gerenciamento de heartbeat no Firebase e limpeza imediata de abas/janelas que travaram
+   */
+  readActiveTabsRegistry() {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const raw = window.localStorage.getItem(STORAGE_KEY_ACTIVE_TABS);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === 'object') return parsed;
+        }
+      }
+    } catch (e) {}
+    return {};
+  }
+
+  writeActiveTabsRegistry(registry) {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(STORAGE_KEY_ACTIVE_TABS, JSON.stringify(registry));
+      }
+    } catch (e) {}
+  }
+
+  touchLocalActiveTab(closed = false) {
+    if (!this.roomId || !this.myPeerId) return;
+    const reg = this.readActiveTabsRegistry();
+    reg[this._tabId] = {
+      roomId: this.roomId,
+      peerId: this.myPeerId,
+      name: this.userInfo?.name || 'Aventureiro',
+      updatedAt: Date.now(),
+      closed: !!closed
+    };
+    this.writeActiveTabsRegistry(reg);
+  }
+
+  clearLocalActiveTab() {
+    const reg = this.readActiveTabsRegistry();
+    if (reg[this._tabId]) {
+      delete reg[this._tabId];
+      this.writeActiveTabsRegistry(reg);
+    }
+  }
+
+  async cleanupCrashedLocalTabs() {
+    if (!this.firebaseDb || !this.roomId) return;
+    const reg = this.readActiveTabsRegistry();
+    const now = Date.now();
+    const staleDeletes = [];
+    let changed = false;
+
+    for (const [tid, entry] of Object.entries(reg)) {
+      if (tid === this._tabId) continue;
+      if (!entry || !entry.peerId) {
+        delete reg[tid];
+        changed = true;
+        continue;
+      }
+      const isStale = !!entry.closed || (now - (entry.updatedAt || 0) > 6000);
+      if (isStale) {
+        if (entry.roomId === this.roomId && entry.peerId !== this.myPeerId) {
+          console.log(`[WebRTC] Removendo registro fantasma da sessão anterior neste PC (${entry.peerId}).`);
+          staleDeletes.push(
+            remove(ref(this.firebaseDb, `rooms/${this.roomId}/peers/${entry.peerId}`)).catch(() => {}),
+            remove(ref(this.firebaseDb, `rooms/${this.roomId}/signals/${entry.peerId}`)).catch(() => {})
+          );
+        }
+        delete reg[tid];
+        changed = true;
+      }
+    }
+
+    if (changed) this.writeActiveTabsRegistry(reg);
+    if (staleDeletes.length > 0) {
+      await Promise.allSettled(staleDeletes);
+    }
+  }
+
+  startFirebasePresenceMaintenance() {
+    this.stopFirebasePresenceMaintenance();
+    this.touchLocalActiveTab(false);
+
+    this.localTabInterval = setInterval(() => {
+      if (this._leftRoom) return;
+      this.touchLocalActiveTab(false);
+    }, 2000);
+
+    this.heartbeatInterval = setInterval(() => {
+      if (this._leftRoom || !this.isFirebaseMode || !this.firebaseDb || !this.roomId) return;
+      this.broadcastMetadata(true);
+    }, 10000);
+
+    this.pruneInterval = setInterval(() => {
+      if (this._leftRoom || !this.isFirebaseMode || !this.firebaseDb || !this.roomId) return;
+      this.pruneStalePeers();
+    }, 6000);
+  }
+
+  stopFirebasePresenceMaintenance() {
+    if (this.localTabInterval) {
+      clearInterval(this.localTabInterval);
+      this.localTabInterval = null;
+    }
+    if (this.heartbeatInterval) {
+      clearInterval(this.heartbeatInterval);
+      this.heartbeatInterval = null;
+    }
+    if (this.pruneInterval) {
+      clearInterval(this.pruneInterval);
+      this.pruneInterval = null;
+    }
+  }
+
+  removeGhostPeerEverywhere(peerId) {
+    if (!peerId || peerId === this.myPeerId) return;
+    this.roomRoster.delete(peerId);
+    this.peerLocalHeartbeats.delete(peerId);
+    this.closePeer(peerId);
+    if (this.isFirebaseMode && this.firebaseDb && this.roomId) {
+      remove(ref(this.firebaseDb, `rooms/${this.roomId}/peers/${peerId}`)).catch(() => {});
+      remove(ref(this.firebaseDb, `rooms/${this.roomId}/signals/${peerId}`)).catch(() => {});
+    }
+  }
+
+  pruneStalePeers() {
+    const now = Date.now();
+    for (const [peerId, rosterData] of Array.from(this.roomRoster.entries())) {
+      if (!peerId || peerId === this.myPeerId) continue;
+      // Só aplica expiração rápida a peers que emitem heartbeat (hb numérico)
+      if (!rosterData || typeof rosterData.hb !== 'number') continue;
+
+      const rec = this.peerLocalHeartbeats.get(peerId);
+      if (!rec) {
+        this.peerLocalHeartbeats.set(peerId, { hb: rosterData.hb, localAt: now });
+        continue;
+      }
+
+      const silentMs = now - rec.localAt;
+      const p = this.peers.get(peerId);
+      const pc = p && p.connection;
+      const connDead = pc && (
+        pc.connectionState === 'failed' ||
+        pc.connectionState === 'disconnected' ||
+        pc.iceConnectionState === 'failed' ||
+        pc.iceConnectionState === 'disconnected'
+      );
+
+      if (silentMs > 32000 || (connDead && silentMs > 18000)) {
+        console.warn(`[WebRTC] Participante fantasma detectado sem heartbeat há ${Math.round(silentMs / 1000)}s: ${rosterData.name || peerId}. Removendo da sala.`);
+        this.removeGhostPeerEverywhere(peerId);
+      }
+    }
+  }
+
+  /**
+   * Limpeza de emergência ao recarregar/fechar janela (pagehide / beforeunload) usando keepalive
+   */
+  sendUnloadCleanup() {
+    const roomId = this.roomId;
+    const peerId = this.myPeerId;
+    if (!roomId || !peerId || this._leftRoom) return;
+    this._leftRoom = true;
+    this.stopFirebasePresenceMaintenance();
+    this.touchLocalActiveTab(true);
+
+    if (this.broadcastChannel) {
+      try {
+        this.broadcastChannel.postMessage({ type: 'peer-leave', from: peerId });
+      } catch (e) {}
+    }
+
+    if (this.isServerSignalingMode && typeof navigator !== 'undefined' && navigator.sendBeacon) {
+      try {
+        const blob = new Blob([JSON.stringify({ peerId })], { type: 'application/json' });
+        navigator.sendBeacon(`/api/rooms/${encodeURIComponent(roomId)}/leave`, blob);
+      } catch (e) {}
+    }
+
+    if (this.isFirebaseMode) {
+      try {
+        const cfg = getStoredFirebaseConfig();
+        const dbUrl = (cfg?.databaseURL || BUILTIN_FIREBASE_CONFIG.databaseURL || '').replace(/\/$/, '');
+        if (dbUrl) {
+          fetch(`${dbUrl}/rooms/${encodeURIComponent(roomId)}/peers/${encodeURIComponent(peerId)}.json`, {
+            method: 'DELETE',
+            keepalive: true
+          }).catch(() => {});
+          fetch(`${dbUrl}/rooms/${encodeURIComponent(roomId)}/signals/${encodeURIComponent(peerId)}.json`, {
+            method: 'DELETE',
+            keepalive: true
+          }).catch(() => {});
+        }
+      } catch (e) {}
+      if (this.firebaseDb) {
+        try { remove(ref(this.firebaseDb, `rooms/${roomId}/peers/${peerId}`)).catch(() => {}); } catch (e) {}
+      }
+    }
+  }
+
+  /**
    * Sai da sala e encerra todas as conexões
    */
   leaveRoom() {
+    this._leftRoom = true;
+    this.stopFirebasePresenceMaintenance();
+    this.clearLocalActiveTab();
+
     // Executa cancelamentos de sinalização
     this.signalingCleanups.forEach(fn => {
       try { fn(); } catch(e) {}
@@ -2770,13 +3267,18 @@ export class TavernWebRTC {
       this.broadcastChannel = null;
     }
 
-    // Encerra todos os peers
+    // Encerra todos os peers e seus watchdogs
     for (const [peerId, peer] of this.peers.entries()) {
-      if (peer.connection) peer.connection.close();
+      if (peer.watchdog) clearInterval(peer.watchdog);
+      if (peer.connection) {
+        try { peer.connection.close(); } catch (e) {}
+      }
       this.onPeerStreamRemoved(peerId, peer.peerInfo);
     }
     this.peers.clear();
+    this.peerQueues.clear();
     this.roomRoster.clear();
+    this.peerLocalHeartbeats.clear();
     if (this.capacityCheckTimer) {
       clearTimeout(this.capacityCheckTimer);
       this.capacityCheckTimer = null;

@@ -1,5 +1,5 @@
-// Sussurro RPG - Service Worker v1.2.2 (Network-First Auto-Updating PWA)
-const CACHE_NAME = 'sussurro-rpg-v1.2.2';
+// Sussurro RPG - Service Worker v1.2.3 (Network-First Auto-Updating PWA)
+const CACHE_NAME = 'sussurro-rpg-v1.2.3';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -50,6 +50,7 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (
     url.pathname.startsWith('/api/') ||
+    url.pathname.startsWith('/privacidade') ||
     url.pathname.startsWith('/@vite') ||
     url.pathname.startsWith('/node_modules/')
   ) {

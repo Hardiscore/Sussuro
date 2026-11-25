@@ -1,0 +1,12 @@
+node_modules
+dist
+release
+.git
+.github
+.aistudio
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+.env.local
+build

@@ -332,7 +332,8 @@ app.whenReady().then(() => {
     }
   }
 
-  if (app.isPackaged && autoUpdater) {
+  // Na Microsoft Store (process.windowsStore), as atualizações são gerenciadas pela própria Loja
+  if (app.isPackaged && autoUpdater && !process.windowsStore) {
     try {
       autoUpdater.autoDownload = true;
       autoUpdater.autoInstallOnAppQuit = true;
@@ -417,6 +418,7 @@ ipcMain.handle('get-app-version', () => {
   return {
     version: app.getVersion(),
     isPackaged: app.isPackaged,
+    isWindowsStore: !!process.windowsStore,
     platform: process.platform,
     arch: process.arch
   };
@@ -427,6 +429,19 @@ ipcMain.on('check-for-updates-manual', async () => {
   console.log('[AutoUpdater] Checagem manual solicitada pelo usuário...');
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('app-update-checking');
+  }
+
+  if (process.windowsStore) {
+    setTimeout(() => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('app-update-not-available', {
+          version: app.getVersion(),
+          isWindowsStore: true,
+          reason: 'windows-store'
+        });
+      }
+    }, 300);
+    return;
   }
 
   if (autoUpdater && app.isPackaged) {
