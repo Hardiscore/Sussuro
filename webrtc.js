@@ -204,10 +204,13 @@ export class TavernWebRTC {
     this.pruneInterval = null;
     this.localTabInterval = null;
 
-    // Supressão de ruído (RNNoise / Noise Gate / Nenhum)
+    // Supressão de ruído (RNNoise / Noise Gate / Nenhum) e ganho de microfone
     this.noiseSuppressionMode = options.noiseSuppressionMode || 'rnnoise';
     this.noiseGateThreshold = options.noiseGateThreshold !== undefined ? options.noiseGateThreshold : 14;
+    this.micGain = options.micGain !== undefined ? Math.max(50, Math.min(300, Number(options.micGain) || 160)) : 160;
     this.highpassFilter = null;
+    this.micBoostGain = null;
+    this.micCompressor = null;
 
     // Versão do Cliente e Compatibilidade Estrita
     this.appVersion = options.appVersion || '1.2.5';
@@ -287,8 +290,17 @@ export class TavernWebRTC {
         if (physicalMatch) return physicalMatch.deviceId;
       }
 
-      const firstPhysical = audioInputs.find(d => d.deviceId !== 'default' && d.deviceId !== 'communications');
-      return firstPhysical ? firstPhysical.deviceId : (requestedId || null);
+      if (aliasEntry && aliasEntry.label) {
+        const cleanAliasLabel = aliasEntry.label.replace(/^(Padr[aã]o|Default|Comunica[cç][oõ]es|Communications)\s*-\s*/i, '').trim();
+        if (cleanAliasLabel) {
+          const labelMatch = audioInputs.find(
+            d => d.deviceId !== 'default' && d.deviceId !== 'communications' && d.label && d.label.trim() === cleanAliasLabel
+          );
+          if (labelMatch) return labelMatch.deviceId;
+        }
+      }
+
+      return requestedId || null;
     } catch (e) {
       return requestedId || null;
     }
@@ -453,11 +465,23 @@ export class TavernWebRTC {
       this.highpassFilter.type = 'highpass';
       this.highpassFilter.frequency.setValueAtTime(this.noiseSuppressionMode === 'none' ? 10 : 80, this.audioContext.currentTime);
 
+      // Pré-amplificador de microfone (compensa microfones naturalmente baixos no Windows)
+      this.micBoostGain = this.audioContext.createGain();
+      this.micBoostGain.gain.setValueAtTime(Math.max(0.5, Math.min(3.0, (Number(this.micGain) || 160) / 100)), this.audioContext.currentTime);
+
       // GainNode para Noise Gate e atenuação real de ruído
       this.noiseGateGain = this.audioContext.createGain();
       this.noiseGateGain.gain.setValueAtTime(1.0, this.audioContext.currentTime);
 
-      // Analisador pré-gate para medir a voz do microfone com precisão contínua (Float32 sem quantização)
+      // Compressor / Limitador suave para encorpar voz baixa sem deixar picos estourarem
+      this.micCompressor = this.audioContext.createDynamicsCompressor();
+      this.micCompressor.threshold.setValueAtTime(-14, this.audioContext.currentTime);
+      this.micCompressor.knee.setValueAtTime(12, this.audioContext.currentTime);
+      this.micCompressor.ratio.setValueAtTime(4, this.audioContext.currentTime);
+      this.micCompressor.attack.setValueAtTime(0.003, this.audioContext.currentTime);
+      this.micCompressor.release.setValueAtTime(0.16, this.audioContext.currentTime);
+
+      // Analisador após o ganho e pré-gate para medir o nível real com precisão contínua
       this.analyser = this.audioContext.createAnalyser();
       this.analyser.fftSize = 1024;
       const timeData = new Float32Array(this.analyser.fftSize);
@@ -466,11 +490,13 @@ export class TavernWebRTC {
       this.audioDestination = this.audioContext.createMediaStreamDestination();
 
       // CONEXÃO DE ÁUDIO CORRETA:
-      // O analisador é conectado no sinal de entrada (pré-gate) para nunca parar de detectar voz quando o portão fechar!
+      // highpass -> micBoostGain -> analyser (pré-gate) e noiseGateGain -> compressor -> destino
       source.connect(this.highpassFilter);
-      this.highpassFilter.connect(this.analyser);
-      this.highpassFilter.connect(this.noiseGateGain);
-      this.noiseGateGain.connect(this.audioDestination);
+      this.highpassFilter.connect(this.micBoostGain);
+      this.micBoostGain.connect(this.analyser);
+      this.micBoostGain.connect(this.noiseGateGain);
+      this.noiseGateGain.connect(this.micCompressor);
+      this.micCompressor.connect(this.audioDestination);
 
       const processedTrack = this.audioDestination.stream.getAudioTracks()[0];
       if (processedTrack) {
@@ -636,6 +662,17 @@ export class TavernWebRTC {
   setNoiseGateThreshold(threshold) {
     this.noiseGateThreshold = Math.max(2, Math.min(50, Number(threshold) || 14));
     return this.noiseGateThreshold;
+  }
+
+  /**
+   * Ajusta o ganho/amplificação do microfone em tempo real (50% a 300%)
+   */
+  setMicGain(gainPercent) {
+    this.micGain = Math.max(50, Math.min(300, Number(gainPercent) || 160));
+    if (this.micBoostGain && this.audioContext) {
+      this.micBoostGain.gain.setTargetAtTime(this.micGain / 100, this.audioContext.currentTime, 0.02);
+    }
+    return this.micGain;
   }
 
   /**
@@ -1777,6 +1814,7 @@ export class TavernWebRTC {
    */
   handlePeerMetaReceived(fromPeerId, userInfo) {
     if (!userInfo) return;
+    const p = this.peers.get(fromPeerId);
     if (p) {
       const wasMuted = !!p.peerInfo?.audioMuted;
       p.peerInfo = { ...p.peerInfo, ...userInfo };
@@ -2122,6 +2160,7 @@ export class TavernWebRTC {
       if (pc.connectionState === 'connected') {
         peerData.health.gaveUp = false;
         peerData.health.cycles = 0;
+        peerData.health.lastProgress = Date.now();
         this.applyQualityProfileToConnection(pc);
       } else if (pc.connectionState === 'failed') {
         console.warn(`[WebRTC][conexão] Conexão com ${peerId} falhou. Renegociando.`);
@@ -2250,13 +2289,13 @@ export class TavernWebRTC {
           // Inicia analisador em tempo real para detectar quando o participante fala (mesmo baixo)
           this.setupRemoteAudioAnalyser(peerId, peerData.remoteStream);
 
-          // Quando os primeiros pacotes RTP chegam e o track desmuta, re-sincroniza a reprodução do áudio
+          // Quando os primeiros pacotes RTP chegam e o track desmuta, garante reprodução e analisador ativos
           track.onunmute = () => {
             console.log(`[WebRTC] Faixa de áudio de ${peerId} desmutada (RTP ativo). Sincronizando saída de áudio...`);
             if (peerData.remoteStream && this.peers.get(peerId) === peerData) {
+              if (peerData.health) peerData.health.lastProgress = Date.now();
               this.setupRemoteAudioAnalyser(peerId, peerData.remoteStream);
               this.onPeerStreamAdded(peerId, peerData.peerInfo || peerInfo, peerData.remoteStream);
-              this.onPeerMediaStalled(peerId, peerData.peerInfo || peerInfo, peerData.remoteStream, 0);
             }
           };
 
@@ -2268,8 +2307,8 @@ export class TavernWebRTC {
           };
 
           this.onPeerStreamAdded(peerId, peerData.peerInfo || peerInfo, peerData.remoteStream);
-          if (replacedOldAudio) {
-            this.onPeerMediaStalled(peerId, peerData.peerInfo || peerInfo, peerData.remoteStream, 0);
+          if (replacedOldAudio && peerData.health) {
+            peerData.health.lastProgress = Date.now();
           }
         }
       }
@@ -2864,7 +2903,8 @@ export class TavernWebRTC {
       }
 
       if (h.gaveUp) return;
-      if (now - Math.max(h.lastProgress, h.lastAction || 0) < 8000) return;
+      const waitWindowMs = pc.connectionState === 'connected' ? 8000 : 14000;
+      if (now - Math.max(h.lastProgress, h.lastAction || 0) < waitWindowMs) return;
 
       const step = h.next;
       h.lastAction = now;
@@ -3514,7 +3554,7 @@ export class TavernWebRTC {
       } else if (sender.track.kind === 'audio') {
         params.encodings[0].priority = 'high';
         params.encodings[0].networkPriority = 'high';
-        params.encodings[0].maxBitrate = 40000;
+        params.encodings[0].maxBitrate = 64000;
       }
 
       await sender.setParameters(params);

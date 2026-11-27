@@ -39,6 +39,7 @@ const STORAGE_KEYS = {
   MIC_HOTKEY: 'tavern_mic_hotkey',
   NOISE_SUPPRESSION_MODE: 'tavern_noise_suppression_mode',
   NOISE_GATE_THRESHOLD: 'tavern_noise_gate_threshold',
+  MIC_GAIN: 'tavern_mic_gain',
   LAYOUT_MODE: 'tavern_layout_mode',
   FIXED_GRID_SLOTS: 'tavern_fixed_grid_slots',
   FIXED_GRID_LOCK: 'tavern_fixed_grid_lock',
@@ -238,6 +239,7 @@ const StorageService = {
       micHotkey: this.get(STORAGE_KEYS.MIC_HOTKEY, '='),
       noiseSuppressionMode: this.get(STORAGE_KEYS.NOISE_SUPPRESSION_MODE, 'noisegate'),
       noiseGateThreshold: parseInt(this.get(STORAGE_KEYS.NOISE_GATE_THRESHOLD, '14'), 10) || 14,
+      micGain: Math.max(50, Math.min(300, parseInt(this.get(STORAGE_KEYS.MIC_GAIN, '160'), 10) || 160)),
       layoutMode: this.get(STORAGE_KEYS.LAYOUT_MODE, 'movel'),
       fixedGridSlots: Math.max(1, Math.min(15, parseInt(this.get(STORAGE_KEYS.FIXED_GRID_SLOTS, '5'), 10) || 5)),
       fixedGridLock: this.get(STORAGE_KEYS.FIXED_GRID_LOCK, 'false') === 'true',
@@ -271,6 +273,10 @@ const StorageService = {
 
   saveNoiseGateThreshold(threshold) {
     return this.set(STORAGE_KEYS.NOISE_GATE_THRESHOLD, threshold);
+  },
+
+  saveMicGain(gain) {
+    return this.set(STORAGE_KEYS.MIC_GAIN, gain);
   },
 
   saveLayoutMode(layout) {
@@ -385,9 +391,10 @@ const state = {
   micHotkey: savedPrefs.micHotkey.toLowerCase(),
   isPttActive: false,
   isRecordingHotkey: false,
-  // Supressão de Ruído & Noise Gate
+  // Supressão de Ruído & Noise Gate & Ganho
   noiseSuppressionMode: savedPrefs.noiseSuppressionMode,
   noiseGateThreshold: savedPrefs.noiseGateThreshold,
+  micGain: savedPrefs.micGain,
   // Layouts de tela
   currentLayout: savedPrefs.layoutMode,
   fixedGridSlots: savedPrefs.fixedGridSlots,
@@ -1314,6 +1321,8 @@ function formatTimeAgo(timestamp) {
 // PRÉVIA DE MÍDIA NO LOBBY
 // ============================================================================
 let lobbyStream = null;
+let lobbyAudioCtx = null;
+let lobbyAudioGain = null;
 let lobbyAudioAnalyser = null;
 let lobbyAudioInterval = null;
 
@@ -1462,30 +1471,44 @@ async function initLobbyPreview(fromUserGesture = false) {
     }
   }
 
-  // Medidor de áudio do Lobby
+  // Medidor de áudio do Lobby (e aba Configurações enquanto fora da chamada)
   if (acquiredAudio) {
     try {
+      if (lobbyAudioInterval) {
+        clearInterval(lobbyAudioInterval);
+        lobbyAudioInterval = null;
+      }
+      if (lobbyAudioCtx) {
+        lobbyAudioCtx.close().catch(() => {});
+        lobbyAudioCtx = null;
+      }
+      lobbyAudioGain = null;
+
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
       if (AudioCtx) {
-        const audioCtx = new AudioCtx();
-        if (audioCtx.state === 'suspended') {
-          audioCtx.resume().catch(() => {});
+        lobbyAudioCtx = new AudioCtx();
+        if (lobbyAudioCtx.state === 'suspended') {
+          lobbyAudioCtx.resume().catch(() => {});
         }
-        const source = audioCtx.createMediaStreamSource(lobbyStream);
-        lobbyAudioAnalyser = audioCtx.createAnalyser();
+        const source = lobbyAudioCtx.createMediaStreamSource(lobbyStream);
+        lobbyAudioGain = lobbyAudioCtx.createGain();
+        lobbyAudioGain.gain.setValueAtTime((state.micGain || 160) / 100, lobbyAudioCtx.currentTime);
+        lobbyAudioAnalyser = lobbyAudioCtx.createAnalyser();
         lobbyAudioAnalyser.fftSize = 256;
-        source.connect(lobbyAudioAnalyser);
+        source.connect(lobbyAudioGain);
+        lobbyAudioGain.connect(lobbyAudioAnalyser);
 
         const buffer = new Uint8Array(lobbyAudioAnalyser.frequencyBinCount);
-        if (lobbyAudioInterval) clearInterval(lobbyAudioInterval);
+        const settingsFillEl = document.getElementById('settings-audio-meter-fill');
 
         lobbyAudioInterval = setInterval(() => {
           lobbyAudioAnalyser.getByteFrequencyData(buffer);
           let sum = 0;
           for (let i = 0; i < buffer.length; i++) sum += buffer[i];
           const avg = sum / buffer.length;
-          const pct = Math.min(100, Math.round((avg / 60) * 100));
+          const pct = Math.min(100, Math.round((avg / 55) * 100));
           if (fillEl) fillEl.style.width = pct + '%';
+          if (settingsFillEl && !state.isInCall) settingsFillEl.style.width = pct + '%';
 
           if (previewBox) {
             const pImg = document.getElementById('lobby-preview-custom-img');
@@ -1656,6 +1679,7 @@ async function startCall(roomId, options = {}) {
   updateCamUI();
 
   // Instancia controlador WebRTC Mesh
+  getRemotePlaybackContext(true);
   state.webrtc = new TavernWebRTC({
     name: state.userName,
     role: state.userRole,
@@ -1665,6 +1689,7 @@ async function startCall(roomId, options = {}) {
     videoDeviceId: state.selectedVideoDeviceId,
     noiseSuppressionMode: state.noiseSuppressionMode,
     noiseGateThreshold: state.noiseGateThreshold,
+    micGain: state.micGain,
     hayfaPcMode: !!state.hayfaPcMode,
     observer: state.isObserver,
 
@@ -1688,6 +1713,10 @@ async function startCall(roomId, options = {}) {
 
     onNoiseGateState: (isPassingVoice, currentAvg, threshold) => {
       updateNoiseGateIndicator(isPassingVoice, currentAvg, threshold);
+      const settingsFillEl = document.getElementById('settings-audio-meter-fill');
+      if (settingsFillEl && state.isInCall) {
+        settingsFillEl.style.width = `${Math.min(100, Math.round((Number(currentAvg) || 0) * 3))}%`;
+      }
     },
 
     onPeerStreamAdded: (peerId, peerInfo, remoteStream) => {
@@ -1944,6 +1973,7 @@ function leaveCall(options = {}) {
     state.webrtc.leaveRoom();
     state.webrtc = null;
   }
+  cleanupAllRemoteAudioGains();
   state.isInCall = false;
 
   releaseWakeLock();
@@ -2133,6 +2163,141 @@ function attachObserverAudio(peerId, stream) {
   audio.play().catch(() => {});
 }
 
+// Amplificação real de áudio remoto (0% a 200%) via Web Audio GainNode + limitador suave
+let remotePlaybackCtx = null;
+const remoteAudioGainMap = new Map(); // key ('peer-<id>' | 'screen-<id>') -> { source, gainNode, compressor, stream, trackId }
+
+function getRemotePlaybackContext(createIfMissing = false) {
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  if (!AudioCtx) return null;
+  if (!remotePlaybackCtx && createIfMissing) {
+    try {
+      remotePlaybackCtx = new AudioCtx();
+    } catch (e) {
+      return null;
+    }
+  }
+  if (remotePlaybackCtx && remotePlaybackCtx.state === 'suspended') {
+    remotePlaybackCtx.resume().catch(() => {});
+  }
+  return remotePlaybackCtx;
+}
+
+function cleanupRemoteAudioGain(key) {
+  const entry = remoteAudioGainMap.get(key);
+  if (!entry) return;
+  try { entry.source?.disconnect(); } catch (e) {}
+  try { entry.gainNode?.disconnect(); } catch (e) {}
+  try { entry.compressor?.disconnect(); } catch (e) {}
+  remoteAudioGainMap.delete(key);
+}
+
+function cleanupAllRemoteAudioGains() {
+  for (const key of Array.from(remoteAudioGainMap.keys())) {
+    cleanupRemoteAudioGain(key);
+  }
+}
+
+function applyRemoteAudioGain(key, stream, mediaElements, volumePercent, isMuted) {
+  const els = (Array.isArray(mediaElements) ? mediaElements : [mediaElements]).filter(Boolean);
+  const safePercent = Math.max(0, Math.min(200, Number(volumePercent) || 0));
+  const clampedVol = isMuted ? 0 : Math.min(1.0, safePercent / 100);
+  const audioTracks = stream && typeof stream.getAudioTracks === 'function' ? stream.getAudioTracks() : [];
+  const primaryTrack = audioTracks[0] || null;
+  const primaryTrackId = primaryTrack ? primaryTrack.id : null;
+
+  // Sem stream de áudio, mutado ou <= 100%: usa elemento <audio> nativo diretamente (zero sobrecarga)
+  if (!primaryTrack || isMuted || safePercent <= 100) {
+    cleanupRemoteAudioGain(key);
+    els.forEach((el, idx) => {
+      // Se passou [video, audio] para tela, mantém video mutado quando há <audio> dedicado
+      const forceElMuted = (els.length > 1 && el.tagName === 'VIDEO' && els.some(other => other.tagName === 'AUDIO'));
+      el.muted = forceElMuted ? true : isMuted;
+      el.volume = forceElMuted ? 0 : clampedVol;
+    });
+    return false;
+  }
+
+  // Volume > 100%: usa GainNode + Compressor Web Audio para amplificar de verdade até 200% sem estourar
+  const ctx = getRemotePlaybackContext(true);
+  if (!ctx) {
+    els.forEach(el => {
+      el.muted = isMuted;
+      el.volume = clampedVol;
+    });
+    return false;
+  }
+
+  let entry = remoteAudioGainMap.get(key);
+  if (entry && (entry.stream !== stream || entry.trackId !== primaryTrackId)) {
+    cleanupRemoteAudioGain(key);
+    entry = null;
+  }
+
+  if (!entry) {
+    try {
+      const source = ctx.createMediaStreamSource(stream);
+      const gainNode = ctx.createGain();
+      const compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.setValueAtTime(-8, ctx.currentTime);
+      compressor.knee.setValueAtTime(10, ctx.currentTime);
+      compressor.ratio.setValueAtTime(6, ctx.currentTime);
+      compressor.attack.setValueAtTime(0.003, ctx.currentTime);
+      compressor.release.setValueAtTime(0.15, ctx.currentTime);
+
+      source.connect(gainNode);
+      gainNode.connect(compressor);
+      compressor.connect(ctx.destination);
+
+      entry = { source, gainNode, compressor, stream, trackId: primaryTrackId };
+      remoteAudioGainMap.set(key, entry);
+    } catch (err) {
+      console.warn(`[Audio] Não foi possível criar ganho Web Audio para ${key}:`, err);
+      els.forEach(el => {
+        el.muted = isMuted;
+        el.volume = clampedVol;
+      });
+      return false;
+    }
+  }
+
+  const targetGain = safePercent / 100;
+  try {
+    entry.gainNode.gain.setTargetAtTime(targetGain, ctx.currentTime, 0.015);
+  } catch (e) {
+    entry.gainNode.gain.value = targetGain;
+  }
+
+  if (ctx.state === 'running') {
+    // Muta o elemento DOM mantendo-o em play() para o Chromium continuar decodificando WebRTC sem áudio duplicado
+    els.forEach(el => {
+      el.muted = true;
+      el.volume = 1.0;
+    });
+    return true;
+  } else {
+    // Enquanto AudioContext aguarda gesto do usuário, toca no volume máximo nativo (100%) e retoma no primeiro clique
+    els.forEach((el, idx) => {
+      const forceElMuted = (els.length > 1 && el.tagName === 'VIDEO' && els.some(other => other.tagName === 'AUDIO'));
+      el.muted = forceElMuted ? true : false;
+      el.volume = forceElMuted ? 0 : 1.0;
+    });
+    const resumeAndSwitch = () => {
+      ctx.resume().then(() => {
+        const currentVol = key.startsWith('screen-')
+          ? state.peerVolumes[`${key.slice(7)}-screen`]
+          : state.peerVolumes[key.slice(5)];
+        if (currentVol !== undefined && currentVol > 100) {
+          applyRemoteAudioGain(key, stream, els, currentVol, isMuted);
+        }
+      }).catch(() => {});
+    };
+    window.addEventListener('click', resumeAndSwitch, { once: true });
+    window.addEventListener('keydown', resumeAndSwitch, { once: true });
+    return false;
+  }
+}
+
 /**
  * Refaz o elemento <audio> de um participante com o stream atual (sem recriar o tile).
  * Usado quando o áudio parou de chegar: às vezes o elemento fica preso no stream antigo.
@@ -2141,24 +2306,29 @@ function reattachPeerAudio(peerId, stream) {
   const tile = document.getElementById(`tile-${peerId}`);
   const audio = tile && tile.querySelector('audio');
   if (!audio || !stream) return;
-  audio.srcObject = null;
-  audio.srcObject = stream;
-  audio._boundAudioTrackId = stream.getAudioTracks ? (stream.getAudioTracks()[0]?.id || null) : null;
+  cleanupRemoteAudioGain(`peer-${peerId}`);
+  const trackId = stream.getAudioTracks ? (stream.getAudioTracks()[0]?.id || null) : null;
+  if (audio.srcObject !== stream || audio._boundAudioTrackId !== trackId) {
+    audio.srcObject = stream;
+    audio._boundAudioTrackId = trackId;
+  }
   const vol = state.peerVolumes[peerId] !== undefined ? state.peerVolumes[peerId] : 100;
   const isMuted = (vol === 0 || !!state.localStreamMutes[peerId]);
-  audio.muted = isMuted;
-  audio.volume = isMuted ? 0 : Math.min(1.0, vol / 100);
-  const p = audio.play();
-  if (p !== undefined) {
-    p.catch(() => {
-      const unlock = () => {
-        audio.play().catch(() => {});
-        window.removeEventListener('click', unlock);
-        window.removeEventListener('keydown', unlock);
-      };
-      window.addEventListener('click', unlock, { once: true });
-      window.addEventListener('keydown', unlock, { once: true });
-    });
+  applyRemoteAudioGain(`peer-${peerId}`, stream, [audio], vol, isMuted);
+  if (audio.paused) {
+    const p = audio.play();
+    if (p !== undefined) {
+      p.catch((err) => {
+        if (err && err.name === 'AbortError') return;
+        const unlock = () => {
+          audio.play().catch(() => {});
+          window.removeEventListener('click', unlock);
+          window.removeEventListener('keydown', unlock);
+        };
+        window.addEventListener('click', unlock, { once: true });
+        window.addEventListener('keydown', unlock, { once: true });
+      });
+    }
   }
 }
 
@@ -2392,28 +2562,28 @@ function addOrUpdatePeerTile(peerId, peerInfo, stream) {
   }
   if (audio) {
     const primaryAudioTrackId = stream && stream.getAudioTracks ? (stream.getAudioTracks()[0]?.id || null) : null;
-    if (audio.srcObject !== stream || audio._boundAudioTrackId !== primaryAudioTrackId) {
-      if (audio.srcObject === stream) {
-        audio.srcObject = null;
-      }
+    const streamChanged = (audio.srcObject !== stream || audio._boundAudioTrackId !== primaryAudioTrackId);
+    if (streamChanged) {
       audio.srcObject = stream;
       audio._boundAudioTrackId = primaryAudioTrackId;
     }
     const isMuted = (currentVol === 0 || !!state.localStreamMutes[peerId]);
-    audio.muted = isMuted;
-    audio.volume = isMuted ? 0 : Math.min(1.0, currentVol / 100);
-    const p = audio.play();
-    if (p !== undefined) {
-      p.catch(err => {
-        console.warn(`[Audio] Autoplay inicial aguardando interação para ${peerId}:`, err.message);
-        const unlock = () => {
-          audio.play().catch(() => {});
-          window.removeEventListener('click', unlock);
-          window.removeEventListener('keydown', unlock);
-        };
-        window.addEventListener('click', unlock, { once: true });
-        window.addEventListener('keydown', unlock, { once: true });
-      });
+    applyRemoteAudioGain(`peer-${peerId}`, stream, [audio], currentVol, isMuted);
+    if (streamChanged || audio.paused) {
+      const p = audio.play();
+      if (p !== undefined) {
+        p.catch(err => {
+          if (err && err.name === 'AbortError') return;
+          console.warn(`[Audio] Autoplay inicial aguardando interação para ${peerId}:`, err.message);
+          const unlock = () => {
+            audio.play().catch(() => {});
+            window.removeEventListener('click', unlock);
+            window.removeEventListener('keydown', unlock);
+          };
+          window.addEventListener('click', unlock, { once: true });
+          window.addEventListener('keydown', unlock, { once: true });
+        });
+      }
     }
   }
   setPeerVolume(peerId, currentVol);
@@ -2432,14 +2602,12 @@ function toggleLocalStreamMute(peerId, peerInfo) {
   const tile = document.getElementById(`tile-${peerId}`);
   if (!tile) return;
 
-  const audio = tile.querySelector('audio');
   const video = tile.querySelector('video');
-  if (audio) {
-    audio.muted = nextMuted || (state.peerVolumes[peerId] === 0);
-  }
   if (video) {
     video.muted = true;
   }
+  const currentVol = state.peerVolumes[peerId] !== undefined ? state.peerVolumes[peerId] : 100;
+  setPeerVolume(peerId, currentVol);
 
   const btn = document.getElementById(`btn-stream-mute-${peerId}`);
   const txt = document.getElementById(`txt-stream-mute-${peerId}`);
@@ -2464,7 +2632,8 @@ function toggleLocalStreamMute(peerId, peerInfo) {
 }
 
 function setPeerVolume(peerId, val) {
-  state.peerVolumes[peerId] = val;
+  const safeVal = Math.max(0, Math.min(200, Number(val) || 0));
+  state.peerVolumes[peerId] = safeVal;
   const tile = document.getElementById(`tile-${peerId}`);
   if (!tile) return;
 
@@ -2473,15 +2642,13 @@ function setPeerVolume(peerId, val) {
   const label = tile.querySelector(`#vol-val-${peerId}`);
   const btn = tile.querySelector(`#btn-vol-${peerId}`);
 
-  if (label) label.textContent = `${val}%`;
+  if (label) label.textContent = `${safeVal}%`;
 
-  const isMuted = (val === 0 || !!state.localStreamMutes[peerId]);
-  const targetVolume = isMuted ? 0 : Math.min(1.0, val / 100);
+  const isMuted = (safeVal === 0 || !!state.localStreamMutes[peerId]);
 
   if (audio) {
-    audio.muted = isMuted;
-    audio.volume = targetVolume;
-    if (!isMuted && audio.paused) {
+    applyRemoteAudioGain(`peer-${peerId}`, audio.srcObject, [audio], safeVal, isMuted);
+    if (!isMuted && audio.paused && audio.srcObject) {
       audio.play().catch(() => {});
     }
   }
@@ -2497,6 +2664,7 @@ function setPeerVolume(peerId, val) {
 }
 
 function removePeerTile(peerId) {
+  cleanupRemoteAudioGain(`peer-${peerId}`);
   peerTileCache.delete(peerId);
   const tile = document.getElementById(`tile-${peerId}`);
   let peerName = 'Um aventureiro';
@@ -2600,8 +2768,10 @@ function addOrUpdateScreenTile(peerId, peerInfo, stream) {
         const v = tile.querySelector('video');
         const a = tile.querySelector('audio');
         const currentV = state.peerVolumes[`${peerId}-screen`] !== undefined ? state.peerVolumes[`${peerId}-screen`] : 100;
-        if (v) { v.muted = false; v.volume = currentV / 100; v.play().catch(() => {}); }
-        if (a) { a.muted = false; a.volume = currentV / 100; a.play().catch(() => {}); }
+        const targetStream = (a && a.srcObject) || (v && v.srcObject) || stream;
+        applyRemoteAudioGain(`screen-${peerId}`, targetStream, [v, a], currentV, currentV === 0);
+        if (v) v.play().catch(() => {});
+        if (a) a.play().catch(() => {});
         btnUnmute.classList.add('hidden');
       };
     }
@@ -2618,22 +2788,21 @@ function addOrUpdateScreenTile(peerId, peerInfo, stream) {
       };
       sliderVol.onclick = (e) => e.stopPropagation();
       sliderVol.oninput = (e) => {
-        const val = parseInt(e.target.value, 10);
+        const val = Math.max(0, Math.min(200, parseInt(e.target.value, 10) || 0));
         state.peerVolumes[`${peerId}-screen`] = val;
         if (valSpan) valSpan.textContent = `${val}%`;
         const videoEl = tile.querySelector('video');
         const audioEl = tile.querySelector('audio');
-        const isMuted = (val === 0);
-        if (videoEl) {
-          videoEl.volume = val / 100;
-          videoEl.muted = isMuted;
-          videoEl.play().catch(() => {});
+        const isMuted = (peerId === 'local' || val === 0);
+        const targetStream = (audioEl && audioEl.srcObject) || (videoEl && videoEl.srcObject) || stream;
+        if (peerId !== 'local') {
+          applyRemoteAudioGain(`screen-${peerId}`, targetStream, [videoEl, audioEl], val, isMuted);
+        } else {
+          if (videoEl) { videoEl.muted = true; videoEl.volume = 0; }
+          if (audioEl) { audioEl.muted = true; audioEl.volume = 0; }
         }
-        if (audioEl) {
-          audioEl.volume = val / 100;
-          audioEl.muted = isMuted;
-          audioEl.play().catch(() => {});
-        }
+        if (videoEl && videoEl.paused) videoEl.play().catch(() => {});
+        if (audioEl && audioEl.paused && peerId !== 'local') audioEl.play().catch(() => {});
         if (val === 0) btnVol.classList.add('is-muted');
         else btnVol.classList.remove('is-muted');
       };
@@ -2656,8 +2825,10 @@ function addOrUpdateScreenTile(peerId, peerInfo, stream) {
           const v = tile.querySelector('video');
           const a = tile.querySelector('audio');
           const b = tile.querySelector(`#btn-unmute-screen-${peerId}`);
-          if (v && v.muted) { v.muted = false; v.volume = vol / 100; v.play().catch(() => {}); }
-          if (a && a.muted) { a.muted = false; a.volume = vol / 100; a.play().catch(() => {}); }
+          const targetStream = (a && a.srcObject) || (v && v.srcObject) || stream;
+          applyRemoteAudioGain(`screen-${peerId}`, targetStream, [v, a], vol, false);
+          if (v && v.paused) v.play().catch(() => {});
+          if (a && a.paused) a.play().catch(() => {});
           if (b) b.classList.add('hidden');
         }
       }
@@ -2698,21 +2869,25 @@ function addOrUpdateScreenTile(peerId, peerInfo, stream) {
   const isMuted = peerId === 'local' || vol === 0;
 
   if (video) {
-    if (video.srcObject !== stream) {
+    const videoStreamChanged = (video.srcObject !== stream);
+    if (videoStreamChanged) {
       video.srcObject = stream;
     }
-    video.volume = vol / 100;
-    video.muted = isMuted;
-    const playPromise = video.play();
-    if (playPromise !== undefined) {
-      playPromise.catch((err) => {
-        console.warn('[ScreenShare] Autoplay com som bloqueado pelo navegador. Ativando muted e botão:', err);
-        video.muted = true;
-        video.play().catch(e => console.error('[ScreenShare] Erro na reprodução de tela:', e));
-        if (btnUnmute && peerId !== 'local' && hasAudioTrack) {
-          btnUnmute.classList.remove('hidden');
-        }
-      });
+    video.volume = isMuted ? 0 : Math.min(1.0, vol / 100);
+    video.muted = isMuted || (peerId !== 'local' && !!audio);
+    if (videoStreamChanged || video.paused) {
+      const playPromise = video.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((err) => {
+          if (err && err.name === 'AbortError') return;
+          console.warn('[ScreenShare] Autoplay com som bloqueado pelo navegador. Ativando muted e botão:', err);
+          video.muted = true;
+          video.play().catch(e => console.error('[ScreenShare] Erro na reprodução de tela:', e));
+          if (btnUnmute && peerId !== 'local' && hasAudioTrack) {
+            btnUnmute.classList.remove('hidden');
+          }
+        });
+      }
     }
   }
 
@@ -2720,9 +2895,9 @@ function addOrUpdateScreenTile(peerId, peerInfo, stream) {
     if (audio.srcObject !== stream) {
       audio.srcObject = stream;
     }
-    audio.volume = vol / 100;
-    audio.muted = isMuted;
+    applyRemoteAudioGain(`screen-${peerId}`, stream, [video, audio], vol, isMuted);
     audio.play().catch((err) => {
+      if (err && err.name === 'AbortError') return;
       console.warn('[ScreenShare] Autoplay do elemento <audio> bloqueado:', err);
       if (btnUnmute && hasAudioTrack) {
         btnUnmute.classList.remove('hidden');
@@ -2734,6 +2909,7 @@ function addOrUpdateScreenTile(peerId, peerInfo, stream) {
 }
 
 function removeScreenTile(peerId) {
+  cleanupRemoteAudioGain(`screen-${peerId}`);
   const tile = document.getElementById(`tile-${peerId}-screen`);
   if (tile && peerId !== 'local') notifyScreenViewing(peerId, false);
   if (tile) {
@@ -3297,6 +3473,24 @@ function setNoiseGateThreshold(val) {
   if (label) label.textContent = threshold.toString();
   if (state.webrtc) {
     state.webrtc.setNoiseGateThreshold(threshold);
+  }
+}
+
+function setMicGain(val) {
+  const gain = Math.max(50, Math.min(300, parseInt(val, 10) || 160));
+  state.micGain = gain;
+  StorageService.saveMicGain(gain);
+  const label = document.getElementById('mic-gain-val');
+  if (label) label.textContent = `${gain}%`;
+  if (lobbyAudioGain && lobbyAudioCtx) {
+    try {
+      lobbyAudioGain.gain.setTargetAtTime(gain / 100, lobbyAudioCtx.currentTime, 0.02);
+    } catch (e) {
+      lobbyAudioGain.gain.value = gain / 100;
+    }
+  }
+  if (state.webrtc) {
+    state.webrtc.setMicGain(gain);
   }
 }
 
@@ -4851,6 +5045,17 @@ function setupSettingsModal() {
     if (thresholdVal) thresholdVal.textContent = state.noiseGateThreshold.toString();
     sliderNoiseGate.oninput = (e) => {
       setNoiseGateThreshold(e.target.value);
+    };
+  }
+
+  // Controle de Ganho / Amplificação do Microfone (50% a 300%)
+  const sliderMicGain = document.getElementById('slider-mic-gain');
+  const micGainVal = document.getElementById('mic-gain-val');
+  if (sliderMicGain) {
+    sliderMicGain.value = state.micGain;
+    if (micGainVal) micGainVal.textContent = `${state.micGain}%`;
+    sliderMicGain.oninput = (e) => {
+      setMicGain(e.target.value);
     };
   }
 
