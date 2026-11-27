@@ -271,7 +271,7 @@ async function startServer() {
         if (data && data.version) return String(data.version).trim();
       }
     } catch (e) {}
-    return "1.2.4";
+    return "1.2.5";
   }
 
   // API de Saúde e Versão (Usada pelo Auto-Updater do PWA)
